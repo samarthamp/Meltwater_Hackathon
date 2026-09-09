@@ -27,7 +27,7 @@ Classic Hangman. A secret word is hidden as underscores, and you guess one lette
 - Win: word fully revealed before 6 wrong guesses.
 - Loss: 6th wrong guess reached with letters still hidden.
 
-Non-letter characters (spaces, digits, punctuation, if present in the vocabulary) are shown to you from the start — you only ever guess a-z.
+No non-alphabet characters will be present in the test set. All words are lowercase, and your guesses must also be lowercase letters.
 
 # Evaluation
 
