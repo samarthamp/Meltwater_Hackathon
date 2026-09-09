@@ -1,0 +1,17 @@
+# Generated artifacts
+artifacts/checkpoints/
+artifacts/datasets/
+artifacts/logs/
+artifacts/metrics/
+submission.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+src/*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Keep the directory structure
+!artifacts/.gitkeep

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hangman"
+version = "1.0.0"
+description = "Neural Hangman solver for the Meltwater Brand Buzzword Hackathon"
+requires-python = ">=3.10"
+dependencies = ["torch", "numpy", "pandas", "tqdm"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

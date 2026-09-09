@@ -1,0 +1,19 @@
+# Conda environment for the Meltwater Hangman Hackathon.
+#
+# NOTE ON TORCH: conda-forge does not publish a PyTorch build for the GB10's
+# `sm_121` compute capability on aarch64.  The environment is therefore
+# conda-provisioned for the interpreter and system-level libraries, while
+# PyTorch itself is installed from NVIDIA's cu130 wheel index by
+# `scripts/00_setup_env.sh` (see requirements.txt).  This is the exact
+# combination verified working on this machine.
+name: hangman
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - git
+  # Build tooling occasionally needed by source-built wheels on aarch64.
+  - cmake
+  - ninja
+  - pkg-config
