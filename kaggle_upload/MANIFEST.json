@@ -1,0 +1,15 @@
+{
+  "checkpoints": [
+    {
+      "name": "former_a_final.pt",
+      "mb_before": 228.676255,
+      "mb_after": 57.175305
+    },
+    {
+      "name": "former_v2_final.pt",
+      "mb_before": 228.710691,
+      "mb_after": 57.175598
+    }
+  ],
+  "note": "Attach this directory as a Kaggle Dataset and point WEIGHTS_DIR at it in notebooks/kaggle_submission.ipynb."
+}
