@@ -1,13 +1,9 @@
 """Supervised trainer for the hangman models.
 
-Nothing exotic: AdamW with a cosine schedule and linear warmup
-(Loshchilov & Hutter, 2019), bf16 autocast, gradient clipping, and an
-exponential moving average of the weights, which reliably buys a fraction of a
-point on the win rate for free.
-
-The loop is deliberately step-based rather than epoch-based, because the
-training pool grows between DAgger rounds and "one epoch" would mean something
-different each round.
+AdamW (Loshchilov & Hutter, 2019) with linear warmup and cosine decay,
+mixed-precision autocast, gradient clipping and an exponential moving average
+of the weights.  The loop is step-based rather than epoch-based because the
+training pool grows between DAgger rounds.
 """
 
 from __future__ import annotations
@@ -110,9 +106,8 @@ def train_steps(
         ema = EMA(model, cfg.optim.ema_decay)
 
     if cfg.optim.compile and not getattr(model, "_hangman_compiled", False):
-        # Compile in place rather than wrapping: ``Module.compile()`` keeps the
-        # module identity, so ``state_dict``, the EMA and checkpointing all
-        # continue to see the original parameter names.
+        # Compile in place rather than wrapping, so ``state_dict``, the EMA and
+        # checkpointing keep the original parameter names.
         model.compile(dynamic=True)
         model._hangman_compiled = True
 
@@ -176,8 +171,7 @@ def save_checkpoint(
 ) -> Path:
     """Persist weights, config and training history together.
 
-    The EMA weights are stored alongside the raw ones so evaluation can compare
-    them without a second training run.
+    EMA weights, when present, are stored alongside the raw ones.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

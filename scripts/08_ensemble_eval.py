@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Stage 8: calibrate the ensemble and choose the inference policy.
 
-Everything here is fitted on the held-out validation dictionary.  ``test.txt``
-is not touched.
+All fitting and reporting use the held-out validation dictionary; ``test.txt``
+is not read.
 
     python scripts/08_ensemble_eval.py --ckpts artifacts/checkpoints/*_final.pt
 """
@@ -60,11 +60,8 @@ def main() -> None:
     cfg = cfgs[0]
     dicts, _, teacher = build_teacher(cfg)
 
-    # Split the validation dictionary in two.  Everything that gets *fitted* -
-    # the per-member noisy-OR blend, the ensemble temperatures and weights - is
-    # fitted on the reserved tail; every number reported comes from the rest.
-    # Without this the headline win rate would be measured partly on words used
-    # to choose its own hyperparameters.
+    # Fit the noisy-OR blends and ensemble calibration on a reserved slice of the
+    # validation words; report only on the disjoint remainder.
     fit_words, reportable = split_validation(dicts.val, args.fit_words)
     words = reportable if not args.eval_words else reportable[: args.eval_words]
     print(f"fitting on {len(fit_words):,} words, reporting on {len(words):,} disjoint words",
@@ -75,11 +72,8 @@ def main() -> None:
     table.add(evaluate_ngram(cfg, teacher, words))
     table.add(evaluate_teacher(cfg, teacher, words))
 
-    # The blend between the presence head and the noisy-OR pooling of the
-    # per-position head is fitted per member rather than assumed.  Measured on
-    # the primary member it is worth several points, and the optimum is not at
-    # the value one would guess: the per-position head, pooled correctly, is a
-    # better presence estimator than the head trained directly for the job.
+    # Per member, fit the blend between the presence head and the noisy-OR
+    # pooling of the per-position head.
     tune_words = fit_words
     noisy_or_weights: dict[str, float] = {}
     sources: list[ModelSource] = []
@@ -152,10 +146,7 @@ def main() -> None:
         )
         policy_scores[mode] = report.win_rate
 
-    # The policy is *selected*, not assumed.  A search policy only ships if it
-    # actually beats greedy on held-out words by more than the noise floor -
-    # measured once at 13.5 points *worse*, when the value head had not yet seen
-    # an on-policy Monte-Carlo return to learn from.
+    # Keep greedy unless a search policy beats it by more than the noise floor.
     greedy_score = policy_scores["greedy"]
     margin = 2.0 * max(r.stderr for r in table.rows if r.tag.startswith("policy/"))
     best_mode = max(policy_scores, key=policy_scores.get)
@@ -168,8 +159,8 @@ def main() -> None:
         flush=True,
     )
 
-    # The configuration actually shipped: calibrated ensemble scores driving the
-    # decision, primary member supplying the auxiliary heads for lookahead.
+    # Full configuration: the calibrated ensemble drives the decision and the
+    # primary member supplies the auxiliary heads for lookahead.
     if len(sources) > 1:
         shipped = ExperimentConfig().policy
         shipped.mode = "auto"
@@ -180,7 +171,7 @@ def main() -> None:
                     calibrated, p, teacher=teacher, length=L, primary=sources[0]
                 ),
                 device=cfg.device,
-                tag="SHIPPED: calibrated ensemble + auto policy",
+                tag="calibrated ensemble + auto policy",
             )
         )
 

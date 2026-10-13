@@ -1,6 +1,5 @@
 # Model Report — Neural Hangman
 
-**Meltwater Brand Buzzword Hackathon**
 Author: m.samartha@students.iiit.ac.in
 Hardware: NVIDIA DGX Spark (GB10, `sm_121`, 128 GB unified memory, 48 SMs, aarch64)
 
@@ -10,10 +9,11 @@ Hardware: NVIDIA DGX Spark (GB10, `sm_121`, 128 GB unified memory, 48 SMs, aarch
 
 The submitted model is a **bidirectional character Transformer trained from scratch on
 `train.txt`**, supervised by an exact dictionary-posterior oracle rather than by hard labels,
-corrected for covariate shift with **DAgger self-play**, and combined with a recurrent and a
-convolutional member into a calibrated ensemble. A **Qwen3-4B** teacher — bidirectionalised,
-layer-truncated and LoRA-finetuned — is distilled in on the states where the dictionary oracle is
-blind.
+corrected for covariate shift with **DAgger self-play**, and shipped as a uniform two-member
+ensemble (`former_a` and the self-distilled `former_v2`) played greedily. Recurrent and
+convolutional members, NLL-fitted ensemble weights, and a bidirectionalised, LoRA-finetuned
+**Qwen3-4B** teacher were also built and measured; sections 9–10a and the finetuning report give
+the numbers and why they were not shipped.
 
 Two more sophisticated inference policies were built, measured, and **not shipped**: value-guided
 one-ply lookahead and exact information-set search. Section 9 gives the numbers and the reasons.
@@ -23,7 +23,7 @@ Two measurements determined the whole design:
 
 | Measurement | Value | Consequence |
 |---|---|---|
-| `train.txt` ∩ `test.txt` | **0 words** | Memorisation is worthless; only generalisation scores. |
+| `train.txt` ∩ `test.txt` | **0 words** | The dictionaries are disjoint; only generalisation scores. |
 | On-policy states with no consistent training-dictionary word | **45.1%** | Lookup and filtering approaches hit a hard wall. A generalising model is required. |
 
 ![Architecture](figures/architecture.svg)
@@ -44,8 +44,7 @@ The rules, as implemented in `src/hangman/simulator.py`:
   repeat of an already-guessed letter;
 * the **sixth** wrong guess ends the game as a loss; five are survivable.
 
-The problem statement's own example loop uses `while wrong_guesses <= 6`, which would permit a
-seventh guess. That contradicts its normative text, so the strict rule is implemented — the
+The strict reading — the game ends on the sixth wrong guess — is implemented. It is the
 conservative choice, since a policy tuned for six survivable misses would lose games under a
 strict scorer but never the reverse.
 
@@ -129,9 +128,8 @@ exact posterior dominates when it is well supported and decays smoothly into the
 is not.
 
 **Noisy-OR pooling, not max-pooling.** The n-gram produces a distribution per hidden position;
-those are pooled into presence marginals with `1 − Π_i(1 − p_i(ℓ))`. Published hangman
-transformers max-pool here, which systematically under-states letters likely to occur in several
-places. This one change is worth more than any architectural choice in this report:
+those are pooled into presence marginals with `1 − Π_i(1 − p_i(ℓ))`. Max-pooling, the common
+alternative, systematically under-states letters likely to occur in several places. This one change is worth more than any architectural choice in this report:
 
 | Pooling | n-gram baseline win rate |
 |---|---:|
@@ -192,10 +190,9 @@ which is what made the 20 M-state warm-start pool take 418 s rather than 3.5 hou
 | Lives remaining | 6-dim one-hot |
 | Length, guesses made, fraction revealed, distinct revealed | 4 scalars |
 
-**The absent set is evidence, not bookkeeping.** Every published hangman transformer we surveyed
-encodes only the board and at best suppresses guessed letters at the output; the reference
-implementation states outright that it "doesn't account for letters guessed but absent". Knowing
-that `q`, `x`, `z` are *not* in the word is strong evidence about what is, and it is free.
+**The absent set is evidence, not bookkeeping.** A board-only encoder at best suppresses guessed
+letters at the output. Knowing that `q`, `x`, `z` are *not* in the word is strong evidence about
+what is, and it is free.
 
 The guessed sets carry no order, so they are permutation-invariant indicator vectors rather than a
 guess-history sequence (Deep Sets, Zaheer et al. 2017).
@@ -311,8 +308,7 @@ guessed-letter sets.
 | On a Kaggle T4 (10 TFLOPS, conservative) | ~3 min |
 
 This is the reason the LLM is distilled rather than shipped: the compact ensemble plays the whole
-test set in minutes, and the submission does not depend on a 4B checkpoint being mountable during
-a private re-run.
+test set in minutes, and inference does not depend on a 4B checkpoint being available.
 
 ---
 
@@ -331,8 +327,8 @@ L = 1.00·BCE(set, bayes_posterior)      soft targets — the main signal
 
 ### 7.2 Stage 0 — reachable-state warm start
 
-Every public hangman network trains on *randomly masked* words. That distribution is not the one a
-game visits:
+The usual approach trains on *randomly masked* words. That distribution is not the one a game
+visits:
 
 * **Reachability.** A live state carries at most five absent letters, because the sixth ends the
   game. Uniform masking produces states with fifteen known-absent letters, which no game reaches,
@@ -406,7 +402,7 @@ there, and at ~1.5 M states/hour blanket distillation would have cost ~25 GPU-ho
 
 ### 7.5 Stage 4 — policy-gradient refinement
 
-Supervised training optimises agreement with a posterior; the leaderboard rewards finishing words.
+Supervised training optimises agreement with a posterior; the objective rewards finishing words.
 An action distribution is induced from the presence head, `π(ℓ|s) = softmax(logits/τ)` over
 unguessed letters, and refined against `win − 0.001·wrong_guesses`, mirroring the published
 tiebreak `Score − E/10⁸`. The value head is the baseline (Williams, 1992); a KL penalty to the
@@ -470,7 +466,7 @@ apart — which is a good reason to expect a search policy to help. Three are im
 
 | Policy | When it engages | What it does |
 |---|---|---|
-| `greedy` | always | argmax of the calibrated ensemble probability |
+| `greedy` | always | argmax of the ensemble presence probability |
 | `value` | lives ≤ 2 | one-ply expectimax over the top-5 letters: `EV(ℓ) = p·V(hit) + (1−p)·V(miss)` |
 | `exact` | candidate set ≤ 120 | re-ranks the model's top-5 by the expected surviving candidate count |
 
@@ -542,7 +538,7 @@ letter" is weak evidence, and overruling a well-trained network on it loses game
 expected-surviving-candidates tiebreak itself is neutral (−0.09 ±0.61), not harmful — it simply
 has nothing to add that the network has not already learned.
 
-The honest conclusion is that **exact information-set search, which the literature supports and
+The conclusion is that **exact information-set search, which the literature supports and
 which works on this problem when the candidate dictionary contains the answer, does not help
 here** — and greedy is also 2.4× cheaper to run. The policy is therefore *selected* on the
 validation dictionary rather than assumed: `scripts/08_ensemble_eval.py` evaluates every mode and
@@ -565,7 +561,6 @@ back to greedy when no calibration file is present.
 | Single model `former_a` (generation one alone) | 72.101% / 68.98% | 180,253 |
 | Bayes teacher that supplied the training labels | 60.97% ±0.37 | — |
 | Static letter frequency (= `sample_submission.csv`) | 14.18% ±0.26 | — |
-| Published solutions to this problem (surveyed) | 42–68% | — |
 
 Leaderboard score `Score − E/10⁸` = **72.946978** (E = 822,235 wrong guesses, 10.20 guesses per
 word). The ensemble is worth **+0.854 points** on the test set over the single model, and it cut
@@ -594,10 +589,8 @@ The remaining ~2 points are not explained by either, and the most likely reading
 dictionary simply contains more morphologically regular words — inflected forms of ordinary stems
 — where the held-out validation slice inherits `train.txt`'s taste for the obscure.
 
-**Which number to trust for the private set depends on which distribution it resembles**, and we
-cannot know. The conservative planning figure is the **68.48%** validation number, because it is
-measured on words drawn from the same list the model was trained on and is therefore the harder
-test of generalisation. 72.10% is what the public test words actually produce.
+The validation figure is the more conservative estimate of generalisation, because it is measured
+on words drawn from the same list the model was trained on and is therefore the harder test.
 
 ¹ measured on `train.txt`, from which the validation dictionary is drawn.
 
@@ -622,7 +615,7 @@ test of generalisation. 72.10% is what the public test words actually produce.
 | policy/value | 56.59 | ±0.37 | 3.69 | 64,744 | 17,530 |
 | policy/exact | 67.23 | ±0.35 | 3.54 | 62,130 | 17,530 |
 | policy/auto | 56.37 | ±0.37 | 3.70 | 64,850 | 17,530 |
-| SHIPPED: calibrated ensemble + auto policy | 57.19 | ±0.37 | 3.67 | 64,255 | 17,530 |
+| calibrated ensemble + auto policy | 57.19 | ±0.37 | 3.67 | 64,255 | 17,530 |
 
 ### 10.2 Stage-by-stage progression, per member
 
@@ -667,7 +660,7 @@ Distillation scored **400,000** selected states at α = 0.5 in 32 min; the teach
 
 ### 10.5 Public test set (self-scored)
 
-Produced by simulating all 250,000 public test words and re-scoring the written CSV independently with a naive per-game scorer.
+Produced by simulating all 250,000 test words and re-scoring the written CSV independently with a naive per-game scorer.
 
 | Quantity | Value |
 |---|---:|
@@ -721,7 +714,7 @@ control:
 3. **37,500 steps / 154M states**, roughly double generation one, whose loss was still falling.
 
 Combining three changes means their individual contributions are not separable — a deliberate
-trade against a deadline, stated rather than hidden.
+trade-off given the compute budget.
 
 ### The result: generation two is worse
 
@@ -826,7 +819,7 @@ members is exactly where the mismatch between NLL and win rate bites.
 `scripts/09_make_submission.py --uniform` bypasses the fitted weights for this reason, and the
 ensemble selector should be considered reliable for *rejecting* members and unreliable for
 *weighting* them. The general lesson is the one the self-distillation gate taught in a different
-costume: **optimise the metric you are judged on, or at least verify your proxy moves with it.**
+costume: **optimise the target metric directly, or at least verify the proxy moves with it.**
 
 ## 10b. Failure analysis — where the remaining 28% goes
 
@@ -956,26 +949,20 @@ tools/
   relabel_with_student.py  rewrites the pool's targets with a trained model
   teacher_comparison.py    scores every label source on the same states
   failure_analysis.py      where the losses are, and how close they were
-  leak_ceiling.py          what a leaked candidate set scores (diagnostic only)
 ```
 
 ---
 
-## 13. Honest limitations
+## 13. Limitations
 
 * The ensemble members were trained for a fixed step budget chosen to fit the compute window, not
   to convergence. Longer training would very likely add a further point or two.
-* The exact information-set search consults the training dictionary at inference. It cannot
-  contain the answer (the dictionaries are disjoint) and is empty for 45% of states, but a
-  reviewer who prefers a model with no dictionary access at inference should use
-  `--policy greedy`; both numbers are reported.
 * Ablation rows measured on the validation dictionary carry a ±0.32-point standard error.
   Differences smaller than ~0.7 points are reported but not claimed as improvements.
 * `value_head` is trained only on on-policy states, so the value-guided policy has no useful
   signal until after the first DAgger round.
 * **Generation two changes three things at once** (self-distilled targets, `w_pos`, step count),
-  so if it wins we will know the combination works and not which part. With a deadline that was
-  the right trade, but it is a real limitation of the evidence.
+  so its result as a single model cannot be attributed to any one of them.
 * **The loss weights predate the noisy-OR finding, and the cheap test of that was negative.**
   `w_pos = 0.40` against `w_set_soft = 1.00` was set on the assumption that the per-position head
   is auxiliary; section 6.5 says the opposite. Fine-tuning the trained model for 2,000 steps with
@@ -988,8 +975,5 @@ tools/
   a better model — a 2.5-hour run that did not fit the window. The distinction matters: a
   converged network has already allocated its capacity, and 2,000 steps at a tenth the learning
   rate is not going to re-allocate it.
-* DAgger rollouts use the **greedy** policy rather than the deployed `auto` policy, for collection
-  speed. Strictly, DAgger's guarantee is about the policy actually deployed. The two differ only
-  where lives ≤ 2 or the candidate set is small, and greedy visits those states too, so the
-  collected distribution covers them — but it is an approximation, and the value targets are
-  greedy-policy returns rather than deployed-policy returns.
+* The value targets used by the value-guided policy are greedy-policy returns, because DAgger
+  rollouts are collected with the greedy policy.

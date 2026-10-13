@@ -1,6 +1,5 @@
 # Research Report — Neural Hangman
 
-**Meltwater Brand Buzzword Hackathon**
 Author: m.samartha@students.iiit.ac.in
 
 This report surveys what has been published on machine-learned Hangman and on the techniques
@@ -208,7 +207,7 @@ a value-head-guided one-ply lookahead in low-life states where the decision is t
 **Borrowed from:** Williams (1992) for REINFORCE with a learned baseline; Schulman et al. (2017)
 for the KL-regularised trust region.
 
-Supervised training optimises agreement with a posterior; the leaderboard rewards finishing words.
+Supervised training optimises agreement with a posterior; the objective rewards finishing words.
 An action distribution is induced from the presence head, `π(ℓ|s) = softmax(logits/τ)` over
 unguessed letters — greedy play is the `τ → 0` limit, so the supervised model is already a valid
 starting policy — and refined against `win − 0.001·wrong_guesses`, which mirrors the published
@@ -302,9 +301,8 @@ All hyperparameters and model selection use the validation dictionary. At 22,530
 standard error of a win rate near 60% is ±0.32 points, so differences below ~0.7 points are not
 separable and are not claimed as such.
 
-**`test.txt` is never trained or tuned on.** The public test words are known, so games can be
-simulated against them for an exact public-leaderboard estimate, and that is the only use they
-get. See `reports/COMPLIANCE.md`.
+**`test.txt` is never trained or tuned on.** The test words are used only to simulate games and
+score the generated submission. See `reports/COMPLIANCE.md`.
 
 **Reported numbers are measured, not estimated.** Every figure in the reports comes from a run
 recorded under `artifacts/metrics/`; the ablation table rows are separate training runs, not

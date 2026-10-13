@@ -1,14 +1,9 @@
 #!/usr/bin/env python
 """Choose the self-distillation gate by measuring target quality.
 
-Before spending hours training against a blended target, measure whether the
-blend is actually better than either source alone.  Each candidate gate is
-scored by the **top-1 hit rate** of the target it produces: how often the
-letter that target ranks first is genuinely in the word.  That is exactly what
-a greedy policy trained on those labels would do, so it is the right proxy.
-
-Reference points already measured on the same metric:
-    Bayes teacher  0.656      student  0.744
+Each candidate gate blends the Bayes teacher with the student and is scored by
+the top-1 hit rate of the resulting target: how often its highest-ranked
+unguessed letter is in the word, which mirrors a greedy policy trained on it.
 
     python tools/blend_sweep.py --ckpt artifacts/checkpoints/former_a_final.pt
 """

@@ -39,10 +39,7 @@ def load(path: Path):
 def training_curves() -> None:
     """Loss, teacher agreement and hit rate over training, per member.
 
-    The vertical marker is where DAgger begins.  The jump in loss and the drop
-    in teacher agreement there are the point of the whole exercise: on-policy
-    states are genuinely harder than randomly masked ones, which is exactly the
-    distribution the model had not been seeing.
+    A dashed vertical line marks where DAgger begins for each member.
     """
     runs: dict[str, list] = {}
     boundaries: dict[str, int] = {}

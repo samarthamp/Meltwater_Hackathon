@@ -1,9 +1,4 @@
-"""Tests for the posterior oracle and the n-gram backoff.
-
-The matmul candidate filter is an optimisation of an obvious elementwise
-predicate, so it is tested against that predicate directly rather than against
-recorded outputs.
-"""
+"""Tests for the Bayes posterior oracle and the n-gram backoff."""
 
 from __future__ import annotations
 

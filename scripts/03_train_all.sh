@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Train the ensemble members on the single GB10, one at a time.
+# Train the ensemble members one at a time on a single GPU.
 #
-# Sequential, and deliberately so.  Measured on this machine:
-#
-#   solo          transformer 3.34 it/s  |  bi-GRU 6.25 it/s
-#   two at once   transformer 1.28 it/s  |  bi-GRU 1.93 it/s
-#   four at once  ~15k states/s aggregate, against 13.7k for one job alone
-#
-# A single job already saturates the device, so sharing it only adds
-# contention: finishing the transformer and the bi-GRU takes ~146 min
-# sequentially against ~247 min concurrently.  Four at once also pushed unified
-# memory to 104 of 119 GB, because GPU memory here is the same physical pool as
-# system RAM.
+# Runs sequentially: one job already saturates the device, so concurrent jobs
+# only add contention. Logs go to artifacts/logs/train_<name>.log.
 #
 # Usage:  bash scripts/03_train_all.sh
+# Env:    PY  Python interpreter (default: the `hangman` conda env)
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -32,16 +24,16 @@ run() {
     echo "=== ${name} done  $(date +%H:%M:%S) (exit $?) ==="
 }
 
-# Primary member: the architecture the report is written around.
+# Primary member: Transformer.
 run former_a --arch transformer --seed 0 --d-model 512 --layers 8 --batch-size 4096 \
     --pretrain-steps 7000 --dagger-steps 4000 --dagger-rounds 3
 
-# Recurrent member: cheap, and expected strongest of the three on short words.
+# Recurrent member: bidirectional GRU.
 run bigru_c --arch bigru --seed 2 --d-model 640 --rnn-layers 4 --batch-size 8192 \
     --pretrain-steps 7000 --dagger-steps 4000 --dagger-rounds 3
 
-# Convolutional member: local bias, suits affixes and digraphs.  Trained
-# shorter because it is the most expensive per step of the three.
+# Convolutional member: local receptive field suits affixes and digraphs.
+# Fewer steps, as it is the most expensive per step.
 run cnn_d --arch dilated_cnn --seed 3 --d-model 448 --cnn-layers 8 --batch-size 4096 \
     --pretrain-steps 5000 --dagger-steps 3000 --dagger-rounds 2
 

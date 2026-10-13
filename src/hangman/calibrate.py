@@ -1,22 +1,8 @@
 """Probability calibration and ensemble weighting.
 
-Two separate jobs, both fitted on the held-out validation dictionary and never
-on ``test.txt``:
-
-*Calibration.*  A network trained on soft targets is usually close to
-calibrated, but the mixture of noisy-OR pooling and the presence head is not,
-and the value-guided policy consumes probabilities as probabilities.  A single
-temperature per source (Guo et al., 2017, *On Calibration of Modern Neural
-Networks*) fixes most of it at negligible cost.
-
-*Ensemble weighting.*  Members differ in quality, so a uniform logit average
-leaves something on the table.  We fit non-negative weights by direct search on
-the quantity we care about - agreement with whether the letter is really in the
-word - rather than on a proxy loss.
-
-Both fits have a handful of parameters against tens of thousands of validation
-states, so the overfitting risk is negligible; the numbers are reported in
-reports/MODEL_REPORT.md alongside the uncalibrated ones.
+Fits one temperature per source (Guo et al., 2017) and then non-negative
+mixture weights over the sources, both by minimising presence NLL on
+held-out validation states.
 """
 
 from __future__ import annotations
@@ -55,14 +41,12 @@ def collect_calibration_states(
     device: str | torch.device = "cuda",
     max_states: int = 200_000,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Play games under ``policy_factory`` and record every source's opinion.
+    """Play games under ``policy_factory`` and record every source's presence logits.
 
     Returns ``(logits, labels)`` where ``logits`` is ``(n_sources, S, 26)`` and
     ``labels`` is ``(S, 26)`` in ``{0, 1}``.  Only unguessed letters carry a
     label; guessed positions are marked with ``-1`` and skipped downstream.
-
-    Crucially, the states come from *on-policy* play, so the calibration is
-    fitted on the distribution the fitted model will actually meet.
+    States come from on-policy play.
     """
     from collections import defaultdict
 
@@ -127,9 +111,10 @@ def fit_calibration(
 ) -> CalibrationFit:
     """Fit per-source temperatures then non-negative mixture weights.
 
-    Temperatures are fitted by grid search per source (one scalar each, so a
-    grid is both exact enough and trivially reproducible); the weights are then
-    fitted by projected gradient descent on the pooled NLL.
+    Temperatures are grid-searched per source.  The weights are
+    softmax-parameterised and fitted with Adam on the NLL of the weighted
+    logits.  ``nll_before`` is the NLL of the uniform average of the
+    temperature-scaled logits.
     """
     n_sources = logits.shape[0]
     grid = temperature_grid if temperature_grid is not None else np.linspace(0.5, 2.5, 41)

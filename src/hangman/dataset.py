@@ -1,14 +1,10 @@
 """Record shards -> model batches.
 
 Training records hold only ``(word_id, guessed_bitmask)`` plus the teacher's
-soft target (66 bytes total, see :mod:`hangman.collect`).  Everything else -
-the board, the present/absent split, remaining lives, per-position labels,
-count buckets - is *derived*, and derived on the GPU, in one vectorised pass
-per batch.
-
-The payoff is that a 50M-state training set is ~3.3 GB on disk and can be
-memory-mapped, while the expansion cost is negligible next to the forward and
-backward passes it feeds.
+soft target (see :mod:`hangman.collect`).  The board, present/absent split,
+per-position labels and count buckets are derived on the device in one
+vectorised pass per batch, so the record pool stays small enough to
+memory-map.
 """
 
 from __future__ import annotations
@@ -35,8 +31,8 @@ class RecordDataset:
     ----------
     shards : list of paths to ``.npy`` record arrays.
     words : the fit dictionary, indexed by ``record['word_id']``.
-    short_word_range, short_word_boost : oversample the length band where the
-        measured baseline loses most of its games (lengths 4-9).
+    short_word_range, short_word_boost : sampling-weight multiplier applied to
+        records whose word length lies in the inclusive range.
     onpolicy_mix : target fraction of each batch drawn from on-policy records.
         ``None`` samples the pool as-is.
     """
@@ -84,17 +80,13 @@ class RecordDataset:
                 weight[on] *= onpolicy_mix / (n_on / self.n)
                 weight[~on] *= (1.0 - onpolicy_mix) / (n_off / self.n)
         self._uniform = bool(np.allclose(weight, weight[0]))
-        # A cumulative table sampled by searchsorted costs O(batch * log n) per
-        # draw; ``rng.choice(p=...)`` is O(n) per call, which at 50M records
-        # would dominate the training step itself.
+        # Inverse-CDF sampling via searchsorted is O(batch * log n) per draw,
+        # whereas ``rng.choice(p=...)`` is O(n) per call.
         self._cdf = None if self._uniform else np.cumsum(weight / weight.sum(), dtype=np.float64)
 
-        # Length-bucketed index.  Drawing a whole batch from one word length
-        # keeps the padded sequence at ``L + 1`` instead of the global 32, and
-        # on this machine (273 GB/s against ~100 TFLOPS bf16) step time is set
-        # by activation traffic, so padded width is the dominant cost lever.
-        # RMSNorm normalises per sample, so a batch sharing one length
-        # introduces none of the statistical coupling batch norm would suffer.
+        # Length-bucketed index: drawing a whole batch from one word length
+        # keeps the padded sequence at ``L + 1`` instead of ``SEQ_LEN``.  RMSNorm
+        # is per-sample, so same-length batches introduce no statistical coupling.
         order = np.argsort(rec_len, kind="stable").astype(np.int64)
         sorted_len = rec_len[order]
         self._bucket_lengths = np.unique(sorted_len)

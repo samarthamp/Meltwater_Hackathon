@@ -1,13 +1,9 @@
 #!/usr/bin/env python
 """Stage 6: fine-tune a trained student on the distillation shards.
 
-The shards written by ``scripts/05_distill.py`` carry the blended target
-``alpha * bayes + (1 - alpha) * qwen`` on the states where the dictionary
-oracle is blind, so fine-tuning on a pool that includes them *is* the
-distillation objective - no new loss term is needed.
-
-The result is kept only if it beats the input checkpoint on held-out words.
-Reporting a regression is more useful than shipping one.
+The shards from ``scripts/05_distill.py`` carry the blended Bayes/Qwen target,
+so fine-tuning on a pool that includes them is the distillation objective.  The
+refined checkpoint is saved only if it does not regress on held-out words.
 
     python scripts/06_distill_finetune.py --ckpt artifacts/checkpoints/former_a_final.pt --steps 3000
 """

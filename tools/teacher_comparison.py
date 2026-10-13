@@ -1,19 +1,9 @@
 #!/usr/bin/env python
 """Compare the LLM teacher against the dictionary oracle on the states it scored.
 
-The distillation stage reports the Qwen teacher's top-1 hit rate, but a bare
-number is not interpretable: 0.53 is excellent if the alternative is 0.40 and
-useless if the alternative is 0.60.  This measures all three sources on exactly
-the same states -
-
-* the **Bayes teacher**, whose target the records already carry;
-* the **Qwen teacher**, recovered from the blend
-  ``blended = alpha * bayes + (1 - alpha) * qwen``;
-* the **student** network, run over the same boards;
-
-and reports how often each one's top unguessed letter is genuinely in the word.
-The states are the ones distillation selected: those where the dictionary
-oracle is blind, plus short words.
+Reports the top-1 hit rate of the Bayes teacher, the Qwen teacher (recovered
+from ``blended = alpha * bayes + (1 - alpha) * qwen``) and the student on the
+states selected for distillation.
 
     python tools/teacher_comparison.py
 """

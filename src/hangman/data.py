@@ -1,13 +1,9 @@
 """Dictionary loading and the disjoint fit/validation split.
 
-The provided ``train.txt`` (225,300 words) and ``test.txt`` (250,000 words)
-share **zero** words.  Any honest local estimate of test performance must
-reproduce that condition, so we split ``train.txt`` by word into a *fit*
-dictionary (used for both model training and as the teacher's candidate set)
-and a *validation dictionary* whose words the model has never seen.
-
-``test.txt`` is loaded only to simulate games for a public-leaderboard estimate.
-It is never used to fit anything - see reports/COMPLIANCE.md.
+``train.txt`` and ``test.txt`` share no words, so ``train.txt`` is split by word
+into a *fit* dictionary (model training and the teacher's candidate set) and a
+disjoint *validation* dictionary that reproduces that condition locally.
+``test.txt`` is only used to simulate games, never to fit anything.
 """
 
 from __future__ import annotations
@@ -116,8 +112,7 @@ def build_dictionaries(cfg: DataConfig) -> Dictionaries:
     """Load train.txt and produce the fit / validation dictionaries.
 
     With ``cfg.use_full_dictionary`` the fit dictionary is all of train.txt and
-    the validation list is empty - the configuration used only for the final
-    submission model, after the recipe has been frozen on the honest split.
+    the validation list is empty; this is used only for the final model.
     """
     words = load_words(cfg.train_path)
     words = [w for w in words if 1 <= len(w) <= MAX_WORD_LEN]
@@ -142,10 +137,7 @@ def build_dictionaries(cfg: DataConfig) -> Dictionaries:
 
 
 def load_test_words(cfg: DataConfig) -> list[str]:
-    """Load the public test words.
-
-    Used exclusively to *simulate* games and self-score; never as training data.
-    """
+    """Load the test words, used only to simulate games, never for training."""
     return load_words(cfg.test_path)
 
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Provision the `hangman` runtime for the Meltwater Hangman Hackathon.
+# Provision the `hangman` conda environment (idempotent; safe to re-run).
 #
-# Idempotent: safe to re-run.  Installs Miniforge3 (aarch64) if no conda is
-# present, creates the `hangman` env, installs pinned requirements from PyPI
-# plus NVIDIA's cu130 wheel index, registers a Jupyter kernel, and prints a
-# hardware verification block.
+# Installs Miniforge3 if no conda is found, creates the env, installs the pinned
+# requirements (torch from the cu130 index) and a Jupyter kernel, then prints a
+# hardware check.
 #
 # Usage:  bash scripts/00_setup_env.sh
+# Env:    CONDA_ROOT  Miniforge install location (default: ~/miniforge3)
 # ---------------------------------------------------------------------------
 set -euo pipefail
 

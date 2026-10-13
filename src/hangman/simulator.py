@@ -1,26 +1,13 @@
-"""Batched lock-step Hangman engine implementing the competition rules exactly.
+"""Batched lock-step Hangman engine implementing the competition rules.
 
-Rules encoded here (from the problem statement)
------------------------------------------------
-* A correct letter reveals **all** of its occurrences at once.
-* "Any character in your string that does not actively reveal a new letter in
-  the hidden word - including an incorrect letter, a repeated/duplicate letter,
-  a space, a number, or an invalid symbol - counts as exactly 1 wrong guess."
-  So a *repeat* of an already-guessed letter is a strike even if that letter is
-  in the word.  The engine implements this; our policies additionally never
-  repeat, because a repeat can only ever cost a life.
-* "The simulation loop for each word terminates instantly the moment your
-  guessed_letters_string triggers a 6th wrong guess or completes the word."
-  Six wrong guesses is therefore a **loss**; five is survivable.
+* A correct letter reveals all of its occurrences at once.
+* Any guess that does not reveal a new letter, including a repeat of an
+  already-guessed letter, counts as one wrong guess.
+* A game ends as soon as the word is complete or the sixth wrong guess is
+  made, so six wrong guesses is a loss and five is survivable.
 
-Note that the blueprint snippet in the problem statement uses
-``while wrong_guesses <= 6``, which would permit a seventh guess.  That
-contradicts the normative rule text quoted above, so we implement the strict
-rule - the conservative choice, since a policy tuned for six survivable misses
-would lose games under the strict scorer but never the reverse.
-
-Every game in a batch advances in lock-step so that a single model forward pass
-serves thousands of games.  Finished games are simply masked out.
+All games in a batch advance in lock-step so a single model forward pass serves
+thousands of games; finished games are masked out.
 """
 
 from __future__ import annotations
@@ -66,7 +53,7 @@ class GameResult:
         return float(self.won.to(torch.float64).mean().item())
 
     def total_wrong(self) -> int:
-        """``E`` in the leaderboard tiebreak ``Score - E / 1e8``."""
+        """``E`` in the scoring tiebreak ``Score - E / 1e8``."""
         return int(self.wrong.sum().item())
 
     def guess_strings(self) -> list[str]:
@@ -153,19 +140,14 @@ class BatchGame:
         in_word = self.truth_presence[rows, letters]
         hit = in_word & ~already
 
-        # Clamp the write index: 26 distinct letters plus five survivable
-        # strikes cannot exceed 31, but a stochastic policy that somehow
-        # repeated itself would index out of bounds, and an out-of-bounds
-        # scatter on CUDA is a device-side assert that surfaces asynchronously
-        # somewhere else entirely.
+        # Clamp the write index defensively: an out-of-bounds CUDA scatter would
+        # surface as an asynchronous device-side assert.
         slot = self.n_guesses[rows].clamp(max=self.guess_seq.shape[1] - 1)
         self.guess_seq[rows, slot] = letters.to(torch.int8)
         self.n_guesses[rows] += 1
 
         self.present[rows[hit], letters[hit]] = True
-        # A letter not in the word is recorded absent whether or not it is a
-        # repeat; a repeat of a *correct* letter needs no state change, it just
-        # costs a life.
+        # A repeat of a correct letter changes no state but still costs a life.
         not_in_word = ~in_word
         self.absent[rows[not_in_word], letters[not_in_word]] = True
         self.wrong[rows[~hit]] += 1

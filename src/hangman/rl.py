@@ -1,33 +1,17 @@
-"""Self-play policy refinement.
+"""Self-play policy refinement by policy gradient.
 
-Supervised training optimises agreement with a posterior.  The leaderboard
-rewards *finishing words within six misses*, and those are not the same
-objective: the supervised loss is indifferent to the order in which lives are
-spent, while the game is not.  This stage closes that gap by optimising the
-actual return with a policy gradient.
+Supervised training matches a posterior, whereas the win-rate objective also
+depends on the order in which lives are spent.  This stage optimises the game
+return directly (REINFORCE with a learned baseline, Williams, 1992):
 
-Setup
------
-*Action distribution.*  The presence head gives independent per-letter
-probabilities, not a distribution over moves, so we induce one:
-``pi(l | s) = softmax(set_logits / tau)`` restricted to unguessed letters.
-Greedy play is the ``tau -> 0`` limit, so the supervised model is already a
-sensible starting policy.
-
-*Reward.*  ``win - efficiency_penalty * wrong_guesses``, matching the published
-ranking ``Score - E / 1e8``: solving the word dominates, and among equal
-outcomes fewer misses ranks higher.
-
-*Baseline.*  The value head, trained in the supervised stage on Monte-Carlo
-returns, is reused as the advantage baseline (Williams, 1992).
-
-*Trust region.*  A KL penalty back to the frozen supervised policy.  Without it
-the policy sharpens into a near-deterministic argmax within a few hundred
-updates and the probabilities stop being usable by the value-guided policy;
-with it the refinement stays local.  This is the PPO-style regularisation of
-Schulman et al. (2017) in its penalty rather than clipped form, which is
-sufficient here because we take one gradient step per batch of fresh rollouts
-and therefore never go off-policy.
+* Policy: ``pi(l | s) = softmax(set_logits / tau)`` over unguessed letters;
+  greedy play is the ``tau -> 0`` limit.
+* Reward: ``win - efficiency_penalty * wrong_guesses``, mirroring the scoring
+  formula ``Score - E / 1e8``.
+* Baseline: the value head, trained on Monte-Carlo returns.
+* Regularisation: a KL penalty to the frozen supervised policy (the penalty
+  form of PPO, Schulman et al., 2017) plus an entropy bonus, keeping the
+  refined probabilities usable by the value-guided policy.
 """
 
 from __future__ import annotations
@@ -61,11 +45,8 @@ class RLStats:
         return path
 
 
-#: Mask value for already-guessed letters.  Deliberately a large finite number
-#: rather than ``-inf``: a row that is entirely ``-inf`` softmaxes to NaN, and
-#: ``torch.multinomial`` on a NaN row raises a device-side assert that surfaces
-#: asynchronously, several calls later, pointing at innocent code.  A finite
-#: floor keeps every row a valid distribution no matter what the model emits.
+#: Mask value for already-guessed letters.  Finite rather than ``-inf``, since
+#: an all ``-inf`` row softmaxes to NaN and ``torch.multinomial`` rejects it.
 MASKED_LOGIT = -1e4
 
 
@@ -82,11 +63,10 @@ def _policy_logits(model, board, lengths, present, absent, amp_dtype=torch.bfloa
 
 
 def _sample_actions(logits: torch.Tensor, temperature: float, allowed: torch.Tensor) -> torch.Tensor:
-    """Sample one letter per state, robustly.
+    """Sample one letter per state.
 
-    Guards the two ways a policy-gradient rollout can hand ``multinomial`` an
-    invalid row - a non-finite probability, and a row that sums to zero - by
-    falling back to a uniform draw over the letters still available.
+    Non-finite probabilities are zeroed, and rows left with no mass fall back
+    to a uniform draw over the letters still available.
     """
     probs = torch.softmax(logits / temperature, dim=1)
     probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0).clamp_min(0.0)

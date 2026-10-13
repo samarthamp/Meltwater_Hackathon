@@ -1,20 +1,13 @@
 #!/usr/bin/env python
 """Stage 5: distil the Qwen3-4B teacher into the compact students.
 
-Selective by design.  Scoring states with a 4B model costs roughly four orders
-of magnitude more than scoring them with the dictionary oracle, so we spend it
-only where the oracle is blind: states whose consistent candidate set is empty
-(measured at 45% of the pool) and short words, where the measured baseline
-loses most of its games.  Everywhere else the exact posterior is already the
-right answer and an LLM opinion could only add noise.
-
-The output is a new set of record shards whose target is the blend
+LLM scoring is expensive, so only states where the dictionary oracle is weak
+are scored: those with no consistent candidate, and short words.  The output
+shards carry the blended target
 
     target = alpha * bayes_posterior + (1 - alpha) * qwen_posterior
 
-so the students need no new loss plumbing: fine-tuning on these shards *is* the
-distillation objective (Hinton et al., 2015), with the blend playing the role
-of the usual hard/soft mixture.
+so fine-tuning on them is the distillation objective with no new loss term.
 
     python scripts/05_distill.py --adapters artifacts/checkpoints/qwen_teacher_adapters.pt
 """
@@ -54,12 +47,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def select_states(dataset: RecordDataset, max_states: int, short_max_len: int) -> np.ndarray:
-    """Pick the states where an outside English prior can actually help.
+    """Pick the states where an outside English prior can help.
 
-    Two criteria, both measured rather than assumed:
-      * ``n_cand == 0`` - no training-dictionary word is consistent, so the
-        exact posterior has nothing to say (45% of the pool);
-      * short words - lengths 4..9 carry almost all of the measured losses.
+    Selects states with no consistent dictionary word (``n_cand == 0``) and
+    short words (lengths 4..``short_max_len``), subsampled to ``max_states``.
     """
     records = dataset.records
     lengths = dataset.word_lengths[records["word_id"]]

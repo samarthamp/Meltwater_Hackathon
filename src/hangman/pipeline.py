@@ -1,8 +1,8 @@
 """Stage functions for the end-to-end pipeline.
 
 Each stage is a plain function so the notebook and the CLI scripts drive the
-same code path.  Artifacts land under ``artifacts/`` and every stage is
-resumable: re-running a completed stage loads what is already on disk.
+same code path.  Artifacts land under ``artifacts/``; the data stages are
+resumable, reusing n-gram tables and record shards already on disk.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def build_teacher(
     cache_dir: Path | None = None,
     rebuild: bool = False,
 ) -> tuple[Dictionaries, NgramModel, BayesTeacher]:
-    """Load or construct the dictionaries, the n-gram tables and the oracle."""
+    """Load or construct the dictionaries, the n-gram tables and the Bayes teacher."""
     ensure_dirs()
     dicts = dicts or build_dictionaries(cfg.data)
     cache_dir = Path(cache_dir or DATASET_DIR)
@@ -114,9 +114,8 @@ def stage_onpolicy_dataset(
 ) -> list[Path]:
     """One DAgger round: roll the current policy out and label what it visits.
 
-    Shards are namespaced by run, because DAgger states are on-policy *for a
-    particular model* - sharing them across ensemble members would reintroduce
-    exactly the distribution mismatch the round exists to remove.
+    Shards are namespaced by run because DAgger states are on-policy for a
+    particular model and should not be shared across ensemble members.
     """
     n_states = n_states or cfg.collect.onpolicy_states_per_round
     prefix = f"onpolicy_{cfg.run_name}_r{round_idx}"
@@ -239,13 +238,8 @@ def split_validation(
 ) -> tuple[list[str], list[str]]:
     """Split the validation dictionary into a fitting set and a reporting set.
 
-    The split must be **random, not positional**.  ``build_dictionaries`` sorts
-    the validation list for reproducibility, so ``val[:8000]`` is the words
-    beginning a-f and ``val[-4000:]`` is s-z - and those differ substantially in
-    difficulty.  Measured with the primary member: 65.29% on the alphabetical
-    head against 71.88% on the alphabetical tail, a 6.6-point gap that has
-    nothing to do with the model.  Fitting on one and reporting on the other
-    would be comparing two different test sets.
+    The split is random rather than positional: ``build_dictionaries`` sorts
+    the validation list, and alphabetical slices differ in difficulty.
 
     Returns ``(fit_words, report_words)``, disjoint, from a seeded permutation.
     """

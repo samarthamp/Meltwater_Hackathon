@@ -61,8 +61,7 @@ def main() -> None:
         save_checkpoint(out, model, cfg, TrainState(step=args.steps), ema=None)
         print(f"kept refined policy -> {out}", flush=True)
     else:
-        # Policy-gradient refinement can overshoot; if it does, say so and keep
-        # the supervised model rather than shipping a regression.
+        # Policy-gradient refinement can overshoot; keep the supervised model.
         print(
             f"RL regressed ({before.win_rate:.2f}% -> {after.win_rate:.2f}%); "
             "keeping the supervised checkpoint",

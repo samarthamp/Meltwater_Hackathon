@@ -1,11 +1,8 @@
 #!/usr/bin/env python
 """Compare two guess policies on the same words, with a paired test.
 
-Two win rates each carrying a +/-0.35 error bar look inseparable when they
-differ by 0.6.  But they are measured on the *same* words, so the right
-statistic is the paired one: of the games where the two disagree, how lopsided
-is the split?  That is McNemar's test, and it is far more sensitive than
-comparing two independent intervals.
+Both policies play the same held-out words, so significance is assessed with
+McNemar's test on the games where their outcomes disagree.
 
     python tools/paired_compare.py --a artifacts/checkpoints/former_a_final.pt \
                                    --b artifacts/checkpoints/former_v2_final.pt

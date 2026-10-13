@@ -1,11 +1,8 @@
 #!/usr/bin/env python
 """Package the minimal inference artefacts for upload as a Kaggle Dataset.
 
-A training checkpoint carries the raw weights, the EMA shadow copy and the full
-training history - 229 MB for a 28.6M-parameter model.  Inference needs one set
-of weights and the config.  This folds the EMA weights in (they are what
-evaluation uses), drops the history, and writes a checkpoint the submission
-notebook loads unchanged.
+Folds the EMA weights into the model state, drops the training history, and
+writes slim checkpoints the submission notebook loads directly.
 
     python tools/export_for_kaggle.py --ckpts artifacts/checkpoints/former_a_final.pt
 """

@@ -10,10 +10,7 @@ import torch.nn.functional as F
 
 
 class RMSNorm(nn.Module):
-    """Root-mean-square layer norm (Zhang & Sennrich, 2019).
-
-    Cheaper than LayerNorm and empirically as stable in pre-norm transformers.
-    """
+    """Root-mean-square layer norm (Zhang & Sennrich, 2019)."""
 
     def __init__(self, dim: int, eps: float = 1e-6) -> None:
         super().__init__()
@@ -22,9 +19,7 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # ``sum(dtype=float32)`` accumulates in fp32 without materialising an
-        # fp32 copy of ``x``.  On this machine (273 GB/s against ~100 TFLOPS)
-        # the model is memory-bound, so avoiding that copy is worth more than
-        # the arithmetic it saves.
+        # fp32 copy of ``x``, which matters when memory-bound.
         var = x.pow(2).sum(-1, keepdim=True, dtype=torch.float32) / x.shape[-1]
         return x * torch.rsqrt(var + self.eps).to(x.dtype) * self.weight
 
@@ -44,12 +39,10 @@ class SwiGLU(nn.Module):
 
 
 class RotaryEmbedding(nn.Module):
-    """Rotary position embedding (Su et al., 2021).
+    """Rotary position embedding (Su et al., 2021) over the character axis.
 
-    Applied on the character axis so that the model sees *relative* offsets
-    between letters - the signal that digraph and affix patterns live in -
-    while the learned absolute embedding separately marks word-initial and
-    word-final positions.
+    Encodes relative offsets between characters; a learned absolute embedding
+    can separately mark word boundaries.
     """
 
     def __init__(self, head_dim: int, max_len: int, base: float = 10_000.0) -> None:
@@ -80,12 +73,10 @@ class RotaryEmbedding(nn.Module):
 class FiLMGenerator(nn.Module):
     """Produces per-layer scale/shift pairs from the global conditioning vector.
 
-    Feature-wise Linear Modulation (Perez et al., 2018).  The guessed-letter
-    sets and remaining lives are *global* constraints on the whole board, so
-    injecting them only at the ``[CLS]`` token would force the network to route
-    them through attention.  FiLM instead lets them modulate every block
-    directly.  Initialised to zero so the network starts as an unconditioned
-    transformer and learns to use the conditioning.
+    Feature-wise Linear Modulation (FiLM, Perez et al., 2018) lets global
+    constraints such as guessed letters and remaining lives modulate every
+    block directly.  The heads are zero-initialised, so the network starts as
+    an unconditioned transformer.
     """
 
     def __init__(self, cond_dim: int, d_model: int, n_layers: int, bottleneck: int = 128) -> None:
@@ -186,14 +177,16 @@ def noisy_or_presence(pos_logits: torch.Tensor, hidden_mask: torch.Tensor) -> to
     """Pool per-position letter distributions into presence probabilities.
 
     ``P(letter present) = 1 - prod_over_hidden_positions (1 - p_i(letter))``,
-    evaluated in log space for stability.  This is the correct probabilistic
-    aggregation; the max-pooling used by public hangman transformers
-    systematically understates letters that are likely to occur more than once.
+    evaluated in log space for stability.
 
     Parameters
     ----------
     pos_logits : (B, L, 26)
     hidden_mask : (B, L) bool, True at positions still hidden.
+
+    Returns
+    -------
+    (B, 26) float32 presence probabilities.
     """
     probs = pos_logits.float().softmax(dim=-1)
     log_miss = torch.log1p(-probs.clamp(max=1.0 - 1e-6))

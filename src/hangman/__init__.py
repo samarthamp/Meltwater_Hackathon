@@ -1,20 +1,25 @@
-"""Neural Hangman solver for the Meltwater Brand Buzzword Hackathon.
+"""Neural Hangman solver.
 
-The package is organised so that the submission notebook is a thin driver over
-importable, unit-testable modules:
+Modules:
 
-    config      - dataclass configuration, the single source of truth
-    data        - dictionary loading and the disjoint fit/validation split
-    teacher     - three-tier Bayes/n-gram posterior oracle (label generator)
-    state       - game state -> model tensors
-    simulator   - batched lock-step game engine implementing competition rules
-    collect     - off-policy and DAgger on-policy state collection
-    models      - HangmanFormer, Bi-GRU, dilated CNN, Qwen3-4B teacher
-    losses      - multi-task objective
-    policy      - guess-selection policies (greedy, value-guided, exact search)
-    ensemble    - calibrated multi-model combination
-    evaluate    - win-rate / efficiency metrics and ablation harness
-    submit      - test.txt -> submission.csv with validators
+    config       - dataclass configuration for every experiment
+    data         - dictionary loading and the disjoint fit/validation split
+    ngram        - interpolated character n-gram model (teacher backoff)
+    teacher      - Bayes posterior oracle that labels training states
+    state        - game state -> model tensors
+    simulator    - batched lock-step game engine implementing the rules
+    collect      - off-policy and DAgger on-policy state collection
+    dataset      - record shards -> model batches
+    models       - HangmanFormer, Bi-GRU, dilated CNN, Qwen3-4B teacher
+    losses       - multi-task objective
+    train        - supervised trainer
+    selfdistill  - student-as-teacher target blending
+    rl           - self-play policy refinement
+    policy       - guess-selection policies (greedy, value-guided, exact search)
+    calibrate    - probability calibration and ensemble weighting
+    evaluate     - win-rate / efficiency metrics
+    pipeline     - stage functions for the end-to-end pipeline
+    submit       - test.txt -> submission.csv with validators
 """
 
 __version__ = "1.0.0"

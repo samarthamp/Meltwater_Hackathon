@@ -1,7 +1,5 @@
 # Finetuning Report — Qwen3-4B as a Hangman Posterior Teacher
 
-**Meltwater Brand Buzzword Hackathon**
-
 This document covers the optional LLM stage: why an external model is brought in at all, the four
 surgical changes made to Qwen3-4B, the throughput accounting that forced distillation to be
 *selective* rather than blanket, and what the stage did and did not buy.
@@ -27,7 +25,7 @@ them, but only with statistics estimated from the same 203k words. Qwen3-4B has 
 magnitude more English, so it carries a prior over letter sequences that the dictionary cannot
 supply — and the blind states are exactly where an outside prior can still contribute something.
 
-This is transfer learning, not leakage. Section 6 states the compliance position precisely, and
+This is ordinary transfer learning. Section 6 sets out how the pretrained model is used, and
 `reports/COMPLIANCE.md` §4 covers it in full.
 
 ---
@@ -173,9 +171,8 @@ time, both of which should have been there from the start: adapters are now chec
 long-running finetune that saves only at the end is one interruption away from being a total loss.
 
 This is recorded in full because "multiply the forward pass by three" is a rule of thumb that
-fails badly on short sequences with many small adapters, and because the honest version of this
-report is the one that says the teacher was trained on a *reduced* budget and lets the reader
-weigh the distillation result accordingly.
+fails badly on short sequences with many small adapters, and because the teacher was trained on
+a *reduced* budget, which the distillation result should be weighed against.
 
 Against a training pool of ~38M states, blanket distillation would need ~25 GPU-hours. That is
 what forced the design decision:
@@ -349,7 +346,7 @@ effectively read the training dictionary hundreds of times. The throughput analy
 explains why that hour bought so few samples: 73 states/s, 6.7× below the naive estimate, because
 126 LoRA adapters on 27-token sequences leave nothing to amortise kernel launches against.
 
-The honest reading is that this is a **compute-bound negative result, not a refutation of transfer
+This is best read as a **compute-bound negative result, not a refutation of transfer
 learning for hangman**. What would be needed to test the idea properly:
 
 * an order of magnitude more finetuning — 3–5 M samples rather than 294 k, which at the measured

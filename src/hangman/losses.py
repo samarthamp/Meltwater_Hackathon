@@ -1,38 +1,26 @@
 """Multi-task training objective.
 
-Four supervision signals share one trunk:
+Several supervision signals share one trunk:
 
 ``set``
-    Binary cross-entropy of the presence head against the teacher's soft
-    posterior.  This is the head the game actually queries.  Soft targets carry
-    the inter-letter structure that hard 0/1 labels destroy - the "dark
-    knowledge" argument of Hinton, Vinyals & Dean (2015) - and they cut gradient
-    variance sharply, because the target for a given board is the *expected*
-    label over all words consistent with it rather than one sample from it.
-    A small hard-label term is retained so the model stays anchored to ground
-    truth on the states where the teacher itself is uncertain.
+    BCE of the presence head against the teacher's soft posterior (soft
+    targets as in Hinton, Vinyals & Dean, 2015), plus an optional hard-label
+    term anchoring it to ground truth.
 
 ``pos``
-    Per-position cross-entropy against the true letter, i.e. ordinary masked
-    language modelling over characters (Devlin et al., 2019).  It supplies
-    ``L`` gradients per state instead of one and is what teaches the trunk
-    orthography; the presence head alone is too weak a signal to learn spelling
-    from.
+    Per-position cross-entropy against the true letter at hidden positions,
+    i.e. masked language modelling over characters (Devlin et al., 2019).
 
 ``count``
-    Occurrence-count buckets ``{0, 1, 2, >=3}`` per letter.  Presence alone does
-    not say how much a hit reveals, and that difference decides whether a guess
-    is worth a life.  The value-guided policy consumes this head directly.
+    Occurrence-count buckets ``{0, 1, 2, >=3}`` per letter.
 
 ``value``
-    Win probability from the current state, regressed on Monte-Carlo returns
-    from self-play.  It is the baseline for the RL stage and the evaluator for
-    one-ply lookahead.
+    Win probability from the current state, regressed on Monte-Carlo returns.
+    Used by one-ply lookahead and as the RL baseline.
 
 ``llm``
-    Optional KL to the Qwen3-4B teacher's posterior, used only in the
-    distillation stage and only on the states where the Bayes teacher is
-    uninformative.
+    Optional KL to an LLM teacher's (Qwen3-4B) posterior, used only in the
+    distillation stage.
 """
 
 from __future__ import annotations
@@ -76,10 +64,8 @@ def _masked_bce(
 ) -> torch.Tensor:
     """BCE-with-logits restricted to ``valid`` entries, mean over the batch.
 
-    Already-guessed letters are excluded rather than pushed to zero: their
-    probability is not a prediction the model is ever asked for, and including
-    them would let the model minimise loss by learning the mask instead of the
-    language.
+    Already-guessed letters are excluded rather than pushed to zero, so the
+    model cannot reduce the loss by learning the mask instead of the language.
     """
     loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
     loss = loss * valid.to(loss.dtype)
@@ -129,9 +115,8 @@ def compute_loss(
 
     pos_loss = zero
     if cfg.w_pos > 0.0 and out.pos_logits is not None:
-        # ``char_target`` already carries -1 at revealed and padded positions:
-        # revealed letters are inputs, and scoring them would reward copying
-        # rather than inference.
+        # ``char_target`` is -1 at revealed and padded positions; scoring
+        # revealed letters would reward copying rather than inference.
         labels = batch["char_target"]
         seq = min(out.pos_logits.shape[1], labels.shape[1])
         logits = out.pos_logits[:, :seq]
@@ -201,8 +186,7 @@ def compute_loss(
 def top1_agreement(out: HangmanOutput, batch: dict[str, torch.Tensor]) -> float:
     """Fraction of states where the model's guess matches the teacher's.
 
-    A cheap proxy for policy quality during training, far faster than running
-    whole games.
+    A cheap training-time proxy for policy quality.
     """
     valid = ~batch["guessed"]
     student = out.set_logits.masked_fill(~valid, float("-inf")).argmax(dim=1)
@@ -212,10 +196,7 @@ def top1_agreement(out: HangmanOutput, batch: dict[str, torch.Tensor]) -> float:
 
 @torch.no_grad()
 def hit_rate(out: HangmanOutput, batch: dict[str, torch.Tensor]) -> float:
-    """Fraction of states where the model's guess is genuinely in the word.
-
-    This is the quantity the game rewards, unlike agreement with the teacher.
-    """
+    """Fraction of states where the model's guess is in the word."""
     valid = ~batch["guessed"]
     student = out.set_logits.masked_fill(~valid, float("-inf")).argmax(dim=1)
     hits = batch["target_hard"].gather(1, student.unsqueeze(1)).squeeze(1)

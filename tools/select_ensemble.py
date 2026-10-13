@@ -1,23 +1,10 @@
 #!/usr/bin/env python
-"""Choose the ensemble composition by measurement, not by assumption.
+"""Choose the ensemble composition by evaluation on the held-out dictionary.
 
-Adding a member to an ensemble is only worth it if it actually helps, and a
-member that is 12 points weaker than the primary may not. Rather than guess,
-this evaluates several candidate compositions on the held-out dictionary and
-writes the winner to ``artifacts/metrics/ensemble_choice.json``.
-
-Candidates considered:
-
-* the primary member alone;
-* the primary plus each other trained architecture;
-* a *snapshot* ensemble of the primary with its own earlier DAgger checkpoints
-  (Huang et al., 2017, *Snapshot Ensembles: Train 1, Get M for Free*) - these
-  cost nothing extra to produce, though they are more correlated than
-  independently trained members;
-* everything together.
-
-A composition must beat the primary alone by more than one standard error to be
-preferred, so a tie defaults to the cheaper model.
+Candidates are the primary alone, the primary plus each other member, the
+primary plus earlier DAgger snapshots of itself, and all members together.  A
+composition must beat the primary alone by more than one standard error to be
+chosen.  The result is written to ``artifacts/metrics/ensemble_choice.json``.
 
     python tools/select_ensemble.py --primary artifacts/checkpoints/former_a_final.pt
 """
@@ -59,18 +46,14 @@ def main() -> None:
                   if Path(p).resolve() != Path(args.primary).resolve()]
     snapshots = args.snapshots
     if snapshots is None:
-        # The primary may be any refinement of a member (``_final``, ``_rl``,
-        # ``_distilled``, ``_wpos``); strip whichever suffix it carries to find
-        # that member's DAgger snapshots.
+        # Strip the refinement suffix to find the member's DAgger snapshots.
         stem = Path(args.primary).stem
         for suffix in ("_final", "_rl", "_distilled", "_wpos", "_pretrain"):
             if stem.endswith(suffix):
                 stem = stem[: -len(suffix)]
                 break
-        # The *last* DAgger checkpoint is byte-identical to ``_final`` - the
-        # trainer writes both from the same state - so averaging with it is
-        # averaging a model with itself.  Take earlier points on the
-        # trajectory, which are what snapshot ensembling is actually about.
+        # The last DAgger checkpoint is identical to ``_final``, so only earlier
+        # snapshots that differ from the primary are used.
         all_snaps = sorted(CHECKPOINT_DIR.glob(f"{stem}_dagger*.pt"))
         candidates = [str(p) for p in all_snaps[:-1]] if len(all_snaps) > 1 else []
         snapshots = [
@@ -92,8 +75,7 @@ def main() -> None:
     tune_words, reportable = split_validation(dicts.val, args.tune_words)
     eval_words = reportable if not args.eval_words else reportable[: args.eval_words]
 
-    # Fit the noisy-OR blend per member first: it is worth several points and
-    # its optimum differs by architecture.
+    # The optimal noisy-OR weight differs by architecture, so fit it per member.
     sources: dict[str, ModelSource] = {}
     fitted_nor: dict[str, float] = {}
     for path, model in models.items():

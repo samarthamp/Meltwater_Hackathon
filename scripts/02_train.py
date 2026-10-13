@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 """Stage 2: supervised warm start plus DAgger self-play rounds for one model.
 
-Several of these run concurrently on the single GB10; the models are small
-enough that a handful share the device productively (see
-``scripts/03_train_all.sh``).
+Run once per ensemble member; ``scripts/03_train_all.sh`` trains the full set.
 
     python scripts/02_train.py --run hangmanformer_a --arch transformer --seed 0
 """
@@ -65,8 +63,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--offpolicy-only", action="store_true",
                         help="ablation: skip DAgger, train on random reachable states only")
     parser.add_argument("--w-pos", type=float, default=None,
-                        help="per-position loss weight; the default 0.40 predates the "
-                             "measurement showing that head is the better presence estimator")
+                        help="per-position loss weight (default 0.40)")
     parser.add_argument("--pool-prefix", default="offpolicy",
                         help="shard prefix for the warm-start pool; use 'sd' for the pool "
                              "relabelled by tools/relabel_with_student.py")
@@ -119,9 +116,8 @@ def main() -> None:
     for name, count, kind in model.parameter_report():
         print(f"    {name:<16} {count:>12,}  {kind}", flush=True)
 
-    # Previous-generation teacher, if self-distilling.  Loaded once and reused
-    # for every DAgger round so the new states get the same target source as
-    # the relabelled warm-start pool.
+    # Self-distillation teacher, reused for every DAgger round so new states share
+    # the relabelled warm-start pool's target source.
     student = None
     if cfg.selfdistill.enabled:
         from hangman.policy import ModelSource

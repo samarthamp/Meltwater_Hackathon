@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 """Render the architecture and data-flow diagrams as standalone SVG.
 
-Written by hand rather than with a plotting library so the output is small,
-diffable, and readable in both light and dark viewers (all colours are
-explicit; nothing relies on a default background).
+All colours are explicit, so the output renders the same in light and dark
+viewers.
 
     python tools/make_diagram.py
 """
@@ -138,8 +137,8 @@ def architecture() -> str:
                  "candidate set ≤ 120 · batched E[|C′|] re-rank", "#ffffff", LINE, size=12))
     p.append(arrow(147, cy + 58, 147, py_ - 4))
 
-    p.append(text(24, 712, "Absent-letter evidence reaches every block through FiLM — published hangman "
-                           "transformers discard it entirely.", 11.5, WARM, weight="600"))
+    p.append(text(24, 712, "Absent-letter evidence reaches every block through FiLM, alongside the "
+                           "revealed board.", 11.5, WARM, weight="600"))
     p.append(text(24, 732, "Noisy-OR replaces the max-pooling used in prior work: measured +8.0 points on the "
                            "n-gram baseline alone.", 11.5, GREEN, weight="600"))
     p.append("</svg>")

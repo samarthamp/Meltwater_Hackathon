@@ -1,15 +1,9 @@
 #!/usr/bin/env python
 """Generate notebooks/kaggle_submission.ipynb.
 
-The full pipeline notebook (`hangman_end_to_end.ipynb`) contains all the
-training code and is the reproducibility artefact.  This second notebook is the
-one to run *on Kaggle*: it vendors the model definition and the game engine
-inline so it has no dependency on the repository being present, loads the
-trained weights from an attached dataset, and plays the test set.
-
-It stays runnable as a training notebook too - the `TRAIN` switch pulls in the
-repository and runs the real pipeline - so the submitted artefact can be
-re-derived from `train.txt` alone, as the rules require.
+The Kaggle inference notebook vendors the model definition and game engine
+inline, loads the trained weights from an attached dataset, and plays the test
+set.  Its `TRAIN` switch runs the full pipeline from `train.txt` instead.
 
     python tools/make_kaggle_notebook.py
 """
@@ -71,8 +65,8 @@ md(r"""
 # Neural Hangman — submission notebook
 
 A bidirectional character Transformer trained from scratch on `train.txt`, supervised by an exact
-dictionary-posterior oracle, corrected for covariate shift with DAgger self-play, and combined
-into a calibrated ensemble.
+dictionary-posterior oracle, corrected for covariate shift with DAgger self-play, and shipped as
+a uniform two-member ensemble.
 
 This notebook **plays** the test set. The complete training pipeline lives in
 `hangman_end_to_end.ipynb` and in `src/hangman/`; set `TRAIN = True` below to run it here instead
@@ -88,12 +82,11 @@ and disjoint from it, exactly as `test.txt` is:
 | Exact Bayes dictionary posterior + backoff (the *teacher* that labelled training) | 61.13% |
 | **This model** | see the final cell |
 
-The two measurements that determined the design:
+The two measurements that shaped the design:
 
-* `train.txt` and `test.txt` share **zero** words, so memorisation is worthless.
+* `train.txt` and `test.txt` share **zero** words, so the model has to generalise to unseen words.
 * **45%** of the game states a real policy visits have **no** consistent word in the training
-  dictionary — dictionary filtering is silent on nearly half of them, which is why a generalising
-  neural model is required rather than merely convenient.
+  dictionary — dictionary filtering is silent on nearly half of them.
 """)
 
 md("## 1. Configuration")
@@ -112,14 +105,8 @@ TRAIN = False
 ON_KAGGLE = Path("/kaggle").exists()
 INPUT_ROOT = Path("/kaggle/input") if ON_KAGGLE else Path("..")
 
-# Paths are *discovered*, not hard-coded.  The competition data mount and the
-# slug of an attached dataset both vary (the slug follows whatever title you
-# gave the dataset), and a wrong guess means the notebook produces no output
-# file - which Kaggle reports only as "this version has no output files".
-# Search at *any* depth.  Kaggle nests attached datasets under
-# /kaggle/input/datasets/<owner>/<name>/versions/N/, which is five levels down,
-# while competition data sits two levels down - so fixed-depth globs find one
-# and miss the other.
+# Input paths are discovered rather than hard-coded: dataset slugs vary, and
+# Kaggle nests attached datasets deeper than competition data.
 def find_file(name: str, root: Path) -> Path | None:
     if (root / name).exists():
         return root / name
@@ -130,10 +117,8 @@ def find_weights(root: Path) -> Path | None:
     hits = sorted(root.rglob("*_final.pt")) or sorted(root.rglob("*.pt"))
     return hits[0].parent if hits else None
 
-# NOTE the names.  The vendored config.py below defines module-level TEST_TXT
-# and TRAIN_TXT, and everything here shares one notebook namespace - so using
-# those names would have them silently overwritten a few cells later, and the
-# run would fail opening a path that does not exist on Kaggle.
+# Not TEST_TXT/TRAIN_TXT: the vendored config.py below defines those names in
+# the same notebook namespace and would overwrite them.
 TEST_FILE = find_file("test.txt", INPUT_ROOT) or (INPUT_ROOT / "Data" / "test.txt")
 TRAIN_FILE = find_file("train.txt", INPUT_ROOT) or (INPUT_ROOT / "Data" / "train.txt")
 WEIGHTS_DIR = find_weights(INPUT_ROOT) or (Path("..") / "artifacts" / "checkpoints")
@@ -151,7 +136,7 @@ if ON_KAGGLE:
 if TEST_FILE is None or not TEST_FILE.exists():
     raise SystemExit(
         "Could not find test.txt. Attach the competition data to this notebook "
-        "(Add Input -> Competitions -> brand-buzzword-hackathon)."
+        "(Add Input -> Competitions)."
     )
 if not WEIGHTS_DIR.exists() or not any(WEIGHTS_DIR.glob("*.pt")):
     raise SystemExit(
@@ -169,10 +154,7 @@ import torch
 print(f"torch {torch.__version__}  cuda={torch.cuda.is_available()}")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Autocast dtype is chosen at *runtime*, not baked in.  This model was trained
-# under bf16 on a Blackwell part, but Kaggle serves T4 (compute 7.5) and P100
-# (6.0), and bf16 needs 8.0+.  Hard-coding bfloat16 here degrades or errors on
-# exactly the hardware this notebook is meant to run on.
+# bf16 needs compute capability 8.0+; Kaggle's T4 and P100 fall back to fp16.
 if DEVICE == "cuda":
     AMP_DTYPE = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -196,9 +178,8 @@ presence (the primary output), per-position (dense masked-LM supervision), occur
 state value.
 
 **What distinguishes it.** The guessed-letter sets — *both* the present and the **absent** ones —
-are first-class inputs, injected into every block by FiLM modulation. Published hangman
-transformers encode only the board; knowing that `q`, `x`, `z` are not in the word is strong
-evidence about what is, and it is free.
+are first-class inputs, injected into every block by FiLM modulation. Knowing that `q`, `x`, `z`
+are not in the word is strong evidence about what is, and it is free.
 """)
 
 # `config.py` resolves paths from ``__file__``, which a notebook cell does not
@@ -248,10 +229,9 @@ md(r"""
 ## 3. Inference
 
 Letter scores blend the presence head with a **noisy-OR pooling** of the per-position head,
-`P(present) = 1 − Π_i(1 − p_i(ℓ))`. That pooling is not a detail: published implementations
-max-pool here, and switching to noisy-OR was worth **+3.2 points** on the model (and +8.0 on the
-n-gram baseline). The per-member blend weight was fitted on the held-out dictionary, never on
-`test.txt`.
+`P(present) = 1 − Π_i(1 − p_i(ℓ))`. Noisy-OR rather than max-pooling was worth **+3.2 points**
+on the model (and +8.0 on the n-gram baseline). The per-member blend weight was fitted on the
+held-out dictionary, never on `test.txt`.
 
 The two ensemble members are averaged with **equal weight**. The NLL-fitted calibration is *not*
 applied — measured on these two members it puts 87.9% of the weight on the weaker one and costs
@@ -338,17 +318,9 @@ for path in checkpoints:
     n = sum(p.numel() for p in model.parameters())
     print(f"  {path.stem:<28} {mcfg.model.arch:<12} {n/1e6:6.2f}M  noisy_or_weight={weight}")
 
-# --------------------------------------------------------------------------
-# Members are averaged with EQUAL weight.  The fitted calibration is
-# deliberately not applied: measured on these two members it puts 87.9% of the
-# weight on the *weaker* model and scores 68.15% against 69.61% for a plain
-# average.  It is fitted by minimising negative log-likelihood, which rewards
-# being calibrated across all 26 letters, while the game only ever asks which
-# letter ranks first.  See reports/MODEL_REPORT.md section 10a.
-#
-# The per-member noisy-OR blend *is* used - that one was fitted against win
-# rate directly and is worth several points.
-# --------------------------------------------------------------------------
+# Members are averaged with equal weight; the NLL-fitted calibration scored
+# lower than a plain average (reports/MODEL_REPORT.md section 10a).  The
+# per-member noisy-OR blend, fitted against win rate, is still applied.
 USE_FITTED_CALIBRATION = False
 
 if len(sources) == 1:
@@ -415,9 +387,7 @@ frame = pd.DataFrame({"word_id": range(len(test_words)), "guessed_letters_string
 frame.to_csv(OUT_CSV, index=False)
 print(f"wrote {OUT_CSV}")
 
-# Re-read the file and re-score it from scratch with a naive per-game scorer,
-# rather than trusting the generator.  A disagreement here would mean the
-# submission does not say what we think it says.
+# Re-read the file and re-score it from scratch with a naive per-game scorer.
 check = pd.read_csv(OUT_CSV, dtype={"word_id": int, "guessed_letters_string": str})
 check["guessed_letters_string"] = check["guessed_letters_string"].fillna("")
 
@@ -436,14 +406,14 @@ for word, guess_string in zip(test_words, check["guessed_letters_string"]):
 
 win_rate = 100 * won / len(check)
 print(f"validator: {won:,}/{len(check):,} solved = {win_rate:.3f}%   E = {wrong:,}")
-print(f"leaderboard score (Score - E/1e8): {win_rate - wrong / 1e8:.6f}")
+print(f"competition score (Score - E/1e8): {win_rate - wrong / 1e8:.6f}")
 assert abs(win_rate - 100 * n_won / len(test_words)) < 1e-9, "generator and validator disagree"
 print("\nall checks passed")
 check.head(8)
 """)
 
 md(r"""
-## Notes for the reviewer
+## Notes
 
 * **`test.txt` is used only to simulate games.** It never trains or tunes anything. Every
   hyperparameter — the teacher's backoff constant, the noisy-OR blend, the ensemble weights and
@@ -452,16 +422,12 @@ md(r"""
   sets and the remaining lives.
 * **Full training code** is in `hangman_end_to_end.ipynb` and `src/hangman/`; set `TRAIN = True`
   above, or run `bash scripts/03_train_all.sh`. Reports covering the architecture, the literature,
-  the LLM-teacher stage and rule compliance are under `reports/`.
+  the LLM-teacher stage and compliance are under `reports/`.
 """)
 
 nb = nbf.v4.new_notebook(cells=cells)
-# Kaggle only provides the stock `python3` kernel.  Declaring the local conda
-# kernel here makes papermill fail before executing a single cell, with
-# "NoSuchKernel: No such kernel named hangman" - and Kaggle then reports only
-# that the version has no output files.  The end-to-end notebook keeps the
-# `hangman` kernel because it is meant to run against this repo's environment;
-# this one must be portable.
+# Kaggle only provides the stock `python3` kernel, so this notebook must not
+# declare the local `hangman` one.
 nb.metadata.kernelspec = {"display_name": "Python 3", "language": "python", "name": "python3"}
 nb.metadata.language_info = {"name": "python", "version": "3.11"}
 OUT.parent.mkdir(parents=True, exist_ok=True)

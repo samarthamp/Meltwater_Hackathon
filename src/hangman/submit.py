@@ -1,13 +1,7 @@
 """Produce and validate ``submission.csv``.
 
-The competition wants, for each test word, the chronological string of letters
-our policy would guess if it played that word.  We therefore *simulate* every
-game locally under the exact scoring rules and record what the policy actually
-did, exactly as the published blueprint describes.
-
-Because the public test words are known, the same simulation yields our own
-score, which is the number reported in the model report.  The test words are
-never used to fit anything - see reports/COMPLIANCE.md.
+Each row is the chronological string of letters the policy guesses for one
+test word, recorded by simulating the game locally under the scoring rules.
 """
 
 from __future__ import annotations
@@ -112,10 +106,8 @@ def validate_submission(
 ) -> SubmissionStats:
     """Re-read the CSV and re-score it from scratch against the rules.
 
-    This deliberately does not trust the generator: it reloads the file, replays
-    every string with the naive reference scorer, and re-derives the win rate.
-    A mismatch between this and the generator's own count would mean the
-    submission does not say what we think it says.
+    Independent of the generator: every string is replayed with the reference
+    scorer.  Raises ``ValueError`` on any format or rule violation.
     """
     frame = pd.read_csv(path, dtype={"word_id": int, "guessed_letters_string": str})
     frame["guessed_letters_string"] = frame["guessed_letters_string"].fillna("")

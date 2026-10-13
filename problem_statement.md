@@ -4,20 +4,6 @@ Build a model that plays Hangman on the provided word list — guessing letters 
 
 This is a code-based competition: you submit a Notebook, not a predictions file. Scoring is done by running your Notebook's submitted code against the test set directly.
 
-# Must Read
-
-To verify your submissions and review your code, we need access to your Kaggle notebooks. Since Kaggle keeps your work private by default, you must manually add the hosting team as collaborators so we can evaluate your solutions.
-
-Please follow these quick steps before the competition deadline:
-
-1. Open your main submission notebook in the Kaggle editor.
-2. Click the "Share" button in the top right corner.
-3. In the Collaborators search bar, search for and add the following two usernames: chetanatanmayee and atharva212.
-4. Ensure our permission level is set to Viewer.
-5. Click Save.
-
-To ensure proper grading, tracking, and the final verification of results, all participants must rename their Kaggle Team Name immediately.
-
 # Description
 
 Classic Hangman. A secret word is hidden as underscores, and you guess one letter at a time:
@@ -88,7 +74,7 @@ Export this final sequence into a file named exactly submission.csv containing t
 import pandas as pd
 
 # Load the public test words list
-with open("/kaggle/input/competitions/brand-buzzword-hackathon/test.txt", "r") as f:
+with open("Data/test.txt", "r") as f:
     test_words = [line.strip().lower() for line in f if line.strip()]
 
 rows = []
@@ -119,17 +105,3 @@ for word_id, test_word in enumerate(test_words):
 pd.DataFrame(rows).to_csv("submission.csv", index=False)
 
 ```
-
-# Final Judgement & Model Evaluation Policy
-
-The public dataset and live leaderboard provided during this 48-hour hackathon are strictly intended as a development sandbox to help you gauge your model's performance and see where you stand.
-
-Please be explicitly warned: We will not blindly follow the live leaderboard ranks for final hiring decisions.
-
-The final judgment and shortlists will be determined entirely by a rigorous execution pass run internally by the Meltwater engineering team. Your submitted model architectures will be re-evaluated against an entirely unshared, locked private evaluation dataset that has been completely firewalled.
-
-Your solution will be holistically evaluated on:
-
-- Algorithmic Sophistication: Creativity and depth in leveraging modern machine learning/deep learning techniques over brute-force heuristics. Advanced model-based approaches (such as Transformers, RNNs, Embeddings, or Custom Neural Networks) will be given significantly higher weightage during our review than simple N-Gram or statistical frequency baselines.
-- Generalization Integrity: There is absolutely no point in hardcoding solutions. Even if you achieve a score of 100 on the public or private leaderboard through hardcoded tricks, lookup leaks, or reverse-engineering, you will NOT receive a prize or an interview. Such tactics will result in immediate disqualification during our internal code audit.
-- Code Cleanliness & Architecture: Production-grade modular design, explicit variable tracking, clean formatting, and structural maintainability.

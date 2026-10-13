@@ -1,15 +1,9 @@
 #!/usr/bin/env python
 """Relabel the training pool with a trained model's own predictions.
 
-Generation one was labelled by an exact dictionary posterior.  Measured on the
-same states, that posterior scores 0.6813 top-1 and the model it trained scores
-0.7568 - so for generation two the model is the better teacher, and
-``tools/blend_sweep.py`` found no gated blend of the two that beats the model
-alone.  This writes a copy of the pool whose targets come from the model.
-
-Only the ``target`` field changes.  ``word_id``, ``guessed``, ``n_cand``,
-``tier``, ``flags`` and ``value`` are copied through unchanged, and that is
-asserted rather than assumed.
+Writes a copy of the pool whose targets come from the student, optionally gated
+against the Bayes posterior with ``--kappa``.  Only the ``target`` field
+changes; all other record fields are copied through and checked unchanged.
 
     python tools/relabel_with_student.py --ckpt artifacts/checkpoints/former_a_final.pt
 """

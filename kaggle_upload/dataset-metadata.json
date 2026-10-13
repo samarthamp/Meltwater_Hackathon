@@ -2,6 +2,6 @@
   "title": "hangman-weights",
   "id": "samarthamp/hangman-weights",
   "licenses": [{"name": "CC0-1.0"}],
-  "subtitle": "Trained character-transformer checkpoints for the Brand Buzzword Hangman task",
+  "subtitle": "Trained character-transformer checkpoints for a neural Hangman solver",
   "description": "Two bidirectional character-Transformer checkpoints (28.6M parameters each, fp16) trained from scratch on the competition train.txt, plus the fitted per-member noisy-OR blend weights. Used by notebooks/kaggle_submission.ipynb as a uniform two-member ensemble."
 }

@@ -1,36 +1,14 @@
 """Self-distillation: using the trained student as a teacher for the next one.
 
-Why
----
-The Bayes oracle that labelled the first generation is *worse than the model it
-trained*. Measured on the states where it matters - oracle-blind and short-word
-states - top-1 hit rate:
-
-    Bayes teacher   0.656
-    student         0.744
-
-So the best target available is no longer the dictionary posterior. This is the
-setting Born-Again Networks describes (Furlanello et al., 2018, *Born-Again
-Neural Networks*): retrain from scratch against the previous generation's own
-predictions, which carry generalisation the original labels did not.
-
-Blending, and why it is gated
------------------------------
-The student is not uniformly better. Where the consistent candidate set is
-large, the exact posterior is a genuinely exact answer and the student is only
-approximating it; where the set is empty - 45% of on-policy states - the oracle
-says nothing at all and only the student has an opinion. So the blend is gated
-on candidate count, reusing the Jelinek-Mercer form already used for the
-teacher's own backoff in :mod:`hangman.teacher`:
+After Born-Again Networks (Furlanello et al., 2018), the next generation trains
+on the previous one's predictions, blended with the Bayes posterior by
+candidate count using the same gate as :mod:`hangman.teacher`::
 
     lambda = n_cand / (n_cand + kappa)      # weight on the Bayes posterior
     target = lambda * bayes + (1 - lambda) * student
 
-``lambda`` is the weight on the *exact* source, matching the sense of the
-teacher's own backoff in :mod:`hangman.teacher`.  So ``kappa -> 0`` is the pure
-Bayes posterior and ``kappa -> inf`` is the pure student: a larger gate means
-"trust the dictionary less".  The value is chosen by measurement in
-``tools/blend_sweep.py``, not by taste.
+``kappa = 0`` gives the pure Bayes posterior and ``kappa = inf`` the pure
+student; in between, the dictionary dominates where many words are consistent.
 """
 
 from __future__ import annotations
@@ -87,8 +65,7 @@ def top1_hit_rate(
 ) -> float:
     """Fraction of states whose top *unguessed* letter is really in the word.
 
-    The metric used throughout to compare label sources, because it is what a
-    greedy policy trained on those labels would actually do.
+    Used to compare label sources, since it mirrors a greedy policy's move.
     """
     pick = scores.masked_fill(guessed, -1e9).argmax(dim=1)
     return float(truth.gather(1, pick.unsqueeze(1)).mean().item())

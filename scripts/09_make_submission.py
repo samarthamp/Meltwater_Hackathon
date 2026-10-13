@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 """Stage 9: simulate every test word and write ``submission.csv``.
 
-The public test words are known, so this both produces the submission and
-self-scores it exactly.  They are used only to *play* games - never to fit
-anything; see reports/COMPLIANCE.md.
+The test words are only played, never fitted on; the run also self-scores the
+generated file and cross-checks it with an independent validator.
 
     python scripts/09_make_submission.py --ckpts artifacts/checkpoints/*_final.pt
 """
@@ -37,15 +36,12 @@ def main() -> None:
     parser.add_argument("--policy", default="fitted",
                         choices=["fitted", "greedy", "value", "exact", "auto"],
                         help="'fitted' uses the mode selected on the validation dictionary "
-                             "by scripts/07_ensemble_eval.py")
+                             "by scripts/08_ensemble_eval.py")
     parser.add_argument("--noisy-or-weight", type=float, default=0.5,
                         help="fallback when the calibration file has no fitted value")
     parser.add_argument("--uniform", action="store_true",
                         help="average ensemble members with equal weight, ignoring the fitted "
-                             "calibration. Measured on two members of similar strength, the "
-                             "NLL-fitted weights scored 68.15%% against 69.61%% for a plain "
-                             "average - fitting log-likelihood is not the same as fitting "
-                             "win rate.")
+                             "calibration")
     parser.add_argument("--out", default=str(REPO_ROOT / "submission.csv"))
     parser.add_argument("--full-dictionary", action="store_true",
                         help="the teacher's candidate set is all of train.txt (submission setting)")
@@ -92,7 +88,7 @@ def main() -> None:
             resolved_policy = blob.get("policy_mode", "greedy")
             print(f"using fitted policy: {resolved_policy}", flush=True)
     if resolved_policy == "fitted":
-        # No calibration file: fall back to the policy that cannot regress.
+        # No calibration file to read a fitted mode from; default to greedy.
         resolved_policy = "greedy"
         print("no calibration file found; defaulting to the greedy policy", flush=True)
     cfg.policy.mode = resolved_policy

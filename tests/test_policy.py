@@ -1,14 +1,4 @@
-"""Tests for the inference policies.
-
-The exact-search policy replaces a per-state Python loop with batched matrix
-algebra, using the identity that two 0/1 indicator rows are equal iff
-
-    rowsum(a) + rowsum(b) - 2 * <a, b> == 0
-
-so the number of same-signature candidate pairs - and hence the expected
-surviving candidate count - is a matmul away.  That identity is the thing worth
-testing, so it is checked against a brute-force count.
-"""
+"""Tests for the inference policies and the exact-search pair-counting identity."""
 
 from __future__ import annotations
 

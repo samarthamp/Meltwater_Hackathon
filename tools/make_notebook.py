@@ -29,21 +29,20 @@ def code(text: str) -> None:
 
 # ---------------------------------------------------------------------------
 md(r"""
-# Neural Hangman — Meltwater Brand Buzzword Hackathon
+# Neural Hangman
 
 End-to-end solution: a **bidirectional character Transformer** trained from scratch on
-`train.txt`, supervised by an exact dictionary-posterior oracle, corrected for covariate shift
-with **DAgger self-play**, ensembled with a recurrent and a convolutional member, and played
-under a **risk-aware policy** that switches to exact information-set search in the endgame.
-A **Qwen3-4B** teacher, bidirectionalised and LoRA-finetuned, is distilled in on the states
-where the dictionary oracle is blind.
+`train.txt`, supervised by an exact dictionary-posterior oracle and corrected for covariate shift
+with **DAgger self-play**. The notebook also covers the recurrent and convolutional baselines, a
+bidirectionalised, LoRA-finetuned **Qwen3-4B** teacher, and the search-based inference policies
+that were measured against greedy play.
 
-## The two measurements that determined the design
+## The two measurements that shaped the design
 
 | Measurement | Value | Why it matters |
 |---|---|---|
-| `train.txt` ∩ `test.txt` | **0 words** | The dictionaries are disjoint. Memorisation is worthless; only generalisation scores. |
-| On-policy states with **no** consistent training-dictionary word | **45%** | Dictionary filtering is silent on nearly half the states a real game visits. A generalising model is required, not optional. |
+| `train.txt` ∩ `test.txt` | **0 words** | The dictionaries are disjoint; only generalisation scores. |
+| On-policy states with **no** consistent training-dictionary word | **45%** | Dictionary filtering is silent on nearly half the states a real game visits. |
 
 ## Baselines to beat (all on a 22,530-word held-out dictionary disjoint from training)
 
@@ -235,8 +234,7 @@ weaker constraint sets, then to a smoothed character n-gram which is defined eve
 
 **Noisy-OR pooling.** The n-gram produces a distribution per hidden position; those are pooled
 into presence marginals with `1 − Π(1 − pᵢ)`. This is the correct probabilistic aggregation and
-it matters a lot: switching from the max-pooling used by published hangman transformers to
-noisy-OR moved the n-gram baseline from 52.7% to 60.7%.
+it matters a lot: switching from max-pooling to noisy-OR moved the n-gram baseline from 52.7% to 60.7%.
 """)
 
 code(r"""
@@ -266,11 +264,9 @@ md(r"""
 A hangman state is `(board, present letters, absent letters, lives)`. Two design decisions:
 
 **The absent set is evidence, not bookkeeping.** Knowing `q`, `x`, `z` are *not* in the word
-sharply reshapes the posterior over what is. Published hangman transformers encode only the
-board and at best suppress guessed letters at the output — the reference implementation we
-surveyed states outright that it "doesn't account for letters guessed but absent". We feed both
-guessed sets in as first-class inputs, injected through **FiLM** modulation so they reach every
-block rather than having to be routed through attention.
+sharply reshapes the posterior over what is. Both guessed sets are first-class inputs, injected
+through **FiLM** modulation so they reach every block rather than having to be routed through
+attention.
 
 **The guessed sets are sets.** They carry no order, so they are encoded as permutation-invariant
 indicator vectors (Deep Sets, Zaheer et al. 2017).
@@ -393,8 +389,8 @@ print(f"~{2 * n_params * 11 * states / 1e12:.0f} TFLOPs total  (seconds on this 
 md(r"""
 ## 6. Stage 0 — reachable-state warm start
 
-Every public hangman network we surveyed trains on *randomly masked* words. That distribution is
-not the one a game visits, in two severe ways:
+The usual approach trains on *randomly masked* words. That distribution is not the one a game
+visits, in two ways:
 
 * **Reachability.** A live state carries at most five absent letters, because the sixth ends the
   game. Uniform masking happily produces states with fifteen known-absent letters, which no game
@@ -607,7 +603,7 @@ the step count, since generation one's loss was still falling when it stopped.
 md(r"""
 ## 10. Stage 4 — policy-gradient refinement
 
-Supervised training optimises agreement with a posterior. The leaderboard rewards *finishing
+Supervised training optimises agreement with a posterior. The objective rewards *finishing
 words within six misses*, and those are not the same objective: the supervised loss is
 indifferent to the order in which lives are spent, and the game is not.
 
@@ -724,10 +720,8 @@ md(r"""
 ## 12. Submission
 
 For each test word we *simulate* the game under our policy and record the letters actually
-guessed, exactly as the published blueprint describes. Because the public test words are known,
-the same simulation self-scores the submission — and the validator below re-reads the CSV and
-re-scores it from scratch with a naive per-game scorer, so we never take the generator's word
-for it.
+guessed. The same simulation self-scores the submission, and the validator below re-reads the
+CSV and re-scores it from scratch with a naive per-game scorer.
 """)
 
 code(r"""
@@ -735,10 +729,8 @@ from hangman.submit import generate_submission, validate_submission, save_stats
 
 cfg.policy.mode = "auto"
 
-# Letter scores come from the calibrated ensemble; the auxiliary heads the
-# lookahead needs (count, value) belong to individual models, so the search
-# policies read them from the primary member.  scripts/09_make_submission.py
-# wires the same combination for the command-line path.
+# The auxiliary heads the lookahead needs (count, value) belong to individual
+# models, so the search policies read them from the primary member.
 def submission_policy(length: int):
     return build_policy(sources[0], cfg.policy, teacher=teacher, length=length)
 
@@ -765,7 +757,7 @@ md(r"""
 |---|---|
 | Exact leave-one-out Bayes posterior as a soft target | calibrated supervision instead of 0/1 labels |
 | Relaxation ladder + noisy-OR n-gram backoff | covers the 45% of states where the oracle is blind |
-| Absent-set conditioning through FiLM | uses evidence that published hangman nets discard |
+| Absent-set conditioning through FiLM | uses the absent-letter evidence a board-only encoder ignores |
 | Noisy-OR pooling of the per-position head | +8.0 points on the n-gram baseline, +3.2 on the model |
 | DAgger self-play rounds | removes the covariate shift random masking bakes in |
 | Heterogeneous ensemble + fitted calibration | independent errors, correctly weighted |

@@ -1,24 +1,11 @@
 """HangmanFormer: a bidirectional character transformer for hangman.
 
-Design summary
---------------
-* **Bidirectional, not causal.**  Reading ``_ o _ _ e r`` requires the suffix as
-  much as the prefix, so the encoder attends both ways, BERT-style
-  (Devlin et al., 2019) over a character alphabet.  Character granularity is
-  the right level for a spelling task - the motivation behind CANINE
-  (Clark et al., 2021), ByT5 (Xue et al., 2021) and Charformer (Tay et al.,
-  2022).
-* **Global constraints via FiLM.**  Guessed-letter sets and remaining lives
-  modulate every block (Perez et al., 2018) instead of being appended to the
-  sequence.
-* **Four heads, one shared trunk.**  A presence head is what the game actually
-  needs; a per-position head supplies dense supervision; a count head tells the
-  policy how much a hit reveals; a value head estimates the win probability so
-  the endgame can be played for win rate rather than for hit rate.
-* **Noisy-OR pooling.**  The per-position distributions are pooled into a
-  second presence estimate with ``1 - prod(1 - p)``, which is the correct
-  probabilistic aggregation.  Public implementations max-pool here, which
-  understates letters likely to occur in several places.
+A BERT-style encoder (Devlin et al., 2019) over the board's characters.  The
+guessed-letter sets and remaining lives enter through the ``[CLS]`` token and,
+optionally, FiLM modulation of every block (Perez et al., 2018).  A shared
+trunk feeds four heads: letter presence (the primary output), per-position
+letters, occurrence counts, and a win-probability value.  The per-position
+distributions can also be noisy-OR pooled into a second presence estimate.
 """
 
 from __future__ import annotations
@@ -158,7 +145,11 @@ class HangmanFormer(nn.Module):
         hidden_mask: torch.Tensor | None = None,
         noisy_or_weight: float = 0.0,
     ) -> torch.Tensor:
-        """``(B, 26)`` presence probability with guessed letters zeroed."""
+        """``(B, 26)`` presence probability with guessed letters zeroed.
+
+        With ``noisy_or_weight > 0`` the set head is blended with the noisy-OR
+        pooled per-position estimate over ``hidden_mask``.
+        """
         out = self(**batch)
         probs = torch.sigmoid(out.set_logits)
         if noisy_or_weight > 0.0 and out.pos_logits is not None and hidden_mask is not None:
@@ -169,7 +160,7 @@ class HangmanFormer(nn.Module):
     # -- introspection ---------------------------------------------------------
 
     def parameter_report(self) -> list[tuple[str, int, str]]:
-        """Layer-by-layer parameter table used in reports/MODEL_REPORT.md."""
+        """``(name, n_params, class_name)`` per submodule, plus a ``TOTAL`` row."""
         rows: list[tuple[str, int, str]] = []
         for name, child in self.named_children():
             n = count_parameters(child)

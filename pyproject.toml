@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hangman"
 version = "1.0.0"
-description = "Neural Hangman solver for the Meltwater Brand Buzzword Hackathon"
+description = "Neural Hangman solver built on a bidirectional character Transformer"
 requires-python = ">=3.10"
 dependencies = ["torch", "numpy", "pandas", "tqdm"]
 

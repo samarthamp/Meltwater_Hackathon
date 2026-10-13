@@ -1,15 +1,11 @@
 """Bi-GRU ensemble member.
 
-Architectural diversity contributes more to an ensemble than seed diversity
-alone (Lakshminarayanan et al., 2017, *Simple and Scalable Predictive
-Uncertainty Estimation using Deep Ensembles*).  A recurrent model makes
-different mistakes from an attention model on the same board - in particular it
-is stronger on short words, where there is little context for attention to
-exploit and where the measured baseline loses most of its games.
-
-The conditioning, heads and output contract are identical to
+A recurrent counterpart to the transformer that adds architectural diversity
+to the ensemble (Lakshminarayanan et al., 2017).  Global features modulate the
+token embeddings through FiLM, and the heads read the first token concatenated
+with a masked mean pool.  The output contract matches
 :class:`~hangman.models.hangmanformer.HangmanFormer`, so the two are
-interchangeable everywhere downstream.
+interchangeable downstream.
 """
 
 from __future__ import annotations

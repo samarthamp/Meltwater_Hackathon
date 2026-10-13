@@ -1,37 +1,13 @@
 """State collection: the off-policy warm start and the DAgger on-policy rounds.
 
-Why the state distribution matters more than the architecture
--------------------------------------------------------------
-Every public hangman network I surveyed trains on *randomly masked* words: pick
-a word, hide a random subset of letters, predict the rest.  That distribution
-is not the one a game visits.  Two mismatches are severe:
+The warm start samples only reachable states (fewer than six misses, absent
+letters drawn in proportion to letter frequency).  DAgger rounds (Ross, Gordon
+& Bagnell, 2011) then roll out the current model, label every visited state
+with the teacher, and aggregate the results into the training pool.
 
-* **Reachability.**  A real state can carry at most five absent letters, since
-  the sixth ends the game.  Uniform random masking happily produces states with
-  fifteen known-absent letters, which no game ever reaches, and starves the
-  model of the tight five-strike endgames that decide win rate.
-* **Correlation.**  A real absent set is biased toward *frequent* letters,
-  because that is what a competent policy guesses first.  Random absent sets
-  are dominated by ``j``, ``q``, ``x``, ``z`` - the letters a real game rarely
-  wastes a guess on.
-
-Behavioural cloning on the wrong state distribution is exactly the covariate
-shift that DAgger was introduced to fix (Ross, Gordon & Bagnell, 2011, *A
-Reduction of Imitation Learning and Structured Prediction to No-Regret Online
-Learning*).  We therefore do both:
-
-1. an off-policy warm start that samples only *reachable* states, with absent
-   letters drawn in proportion to letter frequency; and
-2. successive DAgger rounds that roll out the current model, record every state
-   it actually visits, label them with the teacher, and **aggregate** them into
-   the training set rather than replacing it.
-
-Storage
--------
-A state is fully determined by ``(word, guessed-letter set)``: the board, the
-present/absent split and the remaining lives all follow.  Records therefore
-store eight bytes of state plus the soft target, which keeps a 20M-state
-dataset at ~1.4 GB and lets it be memory-mapped during training.
+A state is fully determined by ``(word, guessed-letter set)``, so a record
+stores eight bytes of state plus the soft target and the pool can be
+memory-mapped during training.
 """
 
 from __future__ import annotations
@@ -104,8 +80,8 @@ class StateCollector:
         student : object with ``presence(board, lengths, present, absent)``,
             optional.  When supplied, the recorded target is a blend of the
             Bayes posterior and this model's predictions, gated on candidate
-            count (see :mod:`hangman.selfdistill`).  Passing ``None`` reproduces
-            the original pure-Bayes labelling exactly.
+            count (see :mod:`hangman.selfdistill`).  ``None`` records the pure
+            Bayes posterior.
         kappa_sd : gate constant for that blend.
         """
         self.dicts = dicts
@@ -126,7 +102,7 @@ class StateCollector:
             self.by_length[length] = np.array(sorted(ids), dtype=np.int64)
 
         # Sampling weights over lengths: proportional to the dictionary, with
-        # the measured loss-heavy band (lengths 4-9) oversampled.
+        # the ``short_word_range`` band oversampled by ``short_word_boost``.
         lengths = sorted(self.by_length)
         weights = np.array([self.by_length[L].size for L in lengths], dtype=np.float64)
         low, high = cfg.short_word_range
@@ -251,14 +227,13 @@ class StateCollector:
         batch_size: int = 8192,
         writer: "ShardWriter | None" = None,
     ) -> CollectionStats:
-        """Sample reachable states uniformly over the game's state space.
+        """Sample reachable states for the off-policy warm start.
 
-        For a word with ``k`` distinct letters we draw the number of revealed
-        letters ``r`` in ``0..k-1`` (``r == k`` is a finished game) and the
-        number of misses ``m`` in ``0..MAX_WRONG_GUESSES-1``.  Revealed letters
-        are a uniform subset of the word's letters; **misses are drawn from the
-        letters not in the word in proportion to their corpus frequency**, so
-        the absent sets look like the ones a competent policy produces.
+        For a word with ``k`` distinct letters, the number of revealed letters
+        ``r`` is drawn from ``0..k-1`` (``r == k`` is a finished game) and the
+        number of misses ``m`` from ``0..MAX_WRONG_GUESSES-1``.  Revealed
+        letters are a uniform subset of the word's letters; misses are drawn
+        from the remaining letters in proportion to their corpus frequency.
         """
         stats = CollectionStats()
         start = time.time()
@@ -297,9 +272,8 @@ class StateCollector:
         :class:`~hangman.simulator.GuessFn`.  Because the teacher needs
         same-length batches, rollouts are grouped by word length.
 
-        Each recorded state receives the Monte-Carlo return of the game it came
-        from (1.0 for a win, 0.0 for a loss), which is the training signal for
-        the value head and the baseline for the RL stage.
+        Each recorded state receives the Monte-Carlo return of its game (1.0
+        for a win, 0.0 for a loss) as the value-head target.
         """
         stats = CollectionStats()
         start = time.time()
@@ -363,10 +337,8 @@ class ShardWriter:
     """Append-only writer that splits records into fixed-size ``.npy`` shards.
 
     Buffered records are written on ``flush``, on reaching ``shard_records``, on
-    leaving the ``with`` block - and on SIGTERM/SIGINT.  The signal handler
-    matters: a long collection pass killed by a timeout would otherwise discard
-    every record it had produced, since a plain ``SIGTERM`` does not unwind the
-    context manager.
+    leaving the ``with`` block, and on SIGTERM/SIGINT, since a plain ``SIGTERM``
+    does not unwind the context manager.
     """
 
     def __init__(self, out_dir: str | Path, prefix: str, shard_records: int = 2_000_000) -> None:

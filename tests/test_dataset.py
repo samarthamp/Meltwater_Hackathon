@@ -1,12 +1,4 @@
-"""Tests for the compact record format.
-
-Training records store only ``(word_id, guessed-letter bitmask)`` plus the soft
-target; the board, the present/absent split, the remaining lives, the
-per-position labels and the count buckets are all *derived* on the GPU at batch
-time.  That derivation is load-bearing - if it disagrees with the game engine by
-even one position, every gradient in the project is computed against the wrong
-state.  So it is checked against ``BatchGame`` directly.
-"""
+"""Tests that compact training records reconstruct game state and targets correctly."""
 
 from __future__ import annotations
 

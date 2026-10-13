@@ -1,36 +1,14 @@
 """Interpolated single-hole character n-gram model.
 
-This is the *backoff tier* of the teacher (Tier 3) and one input to the
-calibrated inference mixture.  It is deliberately not the submission model -
-the competition down-weights statistical baselines - but it is the thing a
-neural model has to beat, and it covers the game states where exact dictionary
-reasoning is blind (measured: 44.4% of on-policy states have no consistent
-dictionary word at all).
+The teacher's backoff tier (Tier 4 in :mod:`hangman.teacher`), defined even
+when no dictionary word fits the board.  For each order ``n`` in
+``2..max_ngram`` it models one character of a window given the other ``n - 1``;
+a window on the board contributes only when exactly one of its slots is hidden,
+and orders are interpolated with weight ``n ** ngram_power`` (Chen & Goodman,
+1999).  Positional and co-occurrence priors cover the opening.
 
-Model
------
-For every order ``n`` in ``2..max_ngram`` and every window of ``n`` characters
-in a padded training word, we record, for each slot ``j`` in the window, the
-conditional distribution of the letter at ``j`` given the other ``n-1``
-characters.  At inference the same windows are read off the board; a window
-contributes only when exactly one of its slots is still hidden.
-
-Evidence from different orders is interpolated with weight ``n ** power``,
-following standard practice of trusting longer contexts more (Chen & Goodman,
-1999, *An empirical study of smoothing techniques for language modeling*).
-
-Two cheap priors cover the opening, when no window has exactly one hole:
-a length-conditioned positional prior ``P(letter at i | length L)`` and a
-co-occurrence prior ``P(letter present | letters known present)``.
-
-Implementation
---------------
-Contexts are encoded as base-28 integers and stored in a *sorted* int64 array
-alongside a ``(n_contexts, 26)`` probability matrix.  Lookup is
-``np.searchsorted``, which makes both construction and scoring fully
-vectorised - construction over the whole dictionary at once, scoring over a
-whole batch of game states at once.  This is what makes labelling tens of
-millions of states tractable.
+Contexts are base-28 integer codes in a sorted array, looked up with
+``np.searchsorted`` so fitting and scoring are fully vectorised.
 """
 
 from __future__ import annotations
@@ -72,9 +50,8 @@ class NgramModel:
     def fit(self, words: list[str], max_len: int, min_count: int = 1) -> "NgramModel":
         """Estimate every table from ``words``.
 
-        ``min_count`` prunes contexts seen fewer than this many times at orders
-        >= 4, which removes the long tail of once-seen high-order contexts
-        without measurably hurting quality.
+        ``min_count`` prunes contexts of order >= 4 seen fewer than this many
+        times.
         """
         by_len: dict[int, list[str]] = {}
         for w in words:
@@ -269,14 +246,9 @@ class NgramModel:
     ) -> np.ndarray:
         """``(B, 26)`` probability that each letter occupies at least one hole.
 
-        Positional distributions are pooled with **noisy-OR**,
-        ``P(present) = 1 - prod_i (1 - p_i(letter))``, which is the correct way
-        to turn per-slot distributions into a presence marginal.  Earlier public
-        hangman transformers max-pool here, which systematically underestimates
-        letters that are likely in several places at once.
-
-        The result is on the same scale as the exact dictionary posterior, so
-        the two can be mixed directly.
+        Positional distributions are pooled with noisy-OR,
+        ``P(present) = 1 - prod_i (1 - p_i(letter))``, so the result is on the
+        same scale as the exact dictionary posterior and mixes with it directly.
         """
         per_pos = self.positional_distribution(boards, lengths)
         miss = np.clip(1.0 - per_pos, 0.0, 1.0)

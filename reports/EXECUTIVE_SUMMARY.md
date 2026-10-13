@@ -1,20 +1,20 @@
 # Neural Hangman — Executive Summary
 
-**Brand Buzzword Hackathon** · m.samartha@students.iiit.ac.in
+Author: m.samartha@students.iiit.ac.in
 
 A 28.6M-parameter bidirectional **character Transformer**, trained from scratch on the provided
 `train.txt`, supervised by an exact dictionary-posterior oracle, corrected for covariate shift
 with **DAgger self-play**, and shipped as a two-member ensemble.
 
-**Public test set: 72.95%** — 182,384 of 250,000 words solved, leaderboard score 72.945.
+**Test set: 72.955%** — 182,388 of 250,000 words solved, competition score 72.946978.
 
 ---
 
-## 1. The two measurements that determined every design decision
+## 1. The two measurements that shaped the design
 
 | Measurement | Value | Consequence |
 |---|---|---|
-| `train.txt` ∩ `test.txt` | **0 words** | Memorisation is worthless. Generalisation is the entire task. |
+| `train.txt` ∩ `test.txt` | **0 words** | The dictionaries are disjoint; the task is generalisation to unseen words. |
 | On-policy game states with **no** consistent training-dictionary word | **45.1%** | Dictionary filtering is silent on nearly half the positions a real game reaches. A generalising model is required, not merely convenient. |
 
 ## 2. Results, on 17,530 held-out words disjoint from training
@@ -32,22 +32,20 @@ central result: a network trained on soft posteriors over millions of states gen
 than the posterior itself, because the posterior is computed from a finite dictionary and the
 network is not.
 
-## 3. What distinguishes this from published solutions
+## 3. Key design choices
 
-Public solutions to this problem cluster at 42–68% and share three omissions:
-
-1. **They discard the absent-letter set.** Knowing `q`, `x`, `z` are *not* in the word is strong
-   evidence about what is. Here both guessed sets are first-class inputs, injected into every
+1. **Both guessed-letter sets are first-class inputs.** Knowing `q`, `x`, `z` are *not* in the
+   word is strong evidence about what is. The present and absent sets are injected into every
    transformer block by **FiLM** modulation rather than routed through attention.
-2. **They train on randomly masked words.** That distribution is unreachable — a live game carries
-   at most five absent letters — and its absent sets are dominated by rare letters where a real
-   game's are dominated by frequent ones. **DAgger self-play** fixes the mismatch: worth **+1.50
+2. **Training states come from real play.** Randomly masked words are an unreachable
+   distribution — a live game carries at most five absent letters, and they are mostly frequent
+   ones. **DAgger self-play** trains on the states the policy actually visits: worth **+1.50
    points** on the transformer and **+5.84** on the weaker recurrent member.
-3. **They pool per-position scores with a max.** The correct aggregation is noisy-OR,
-   `1 − Π(1 − pᵢ)`. Worth **+8.0 points** on the n-gram baseline and **+3.2** on the model — a
-   larger effect than any architectural choice here.
+3. **Noisy-OR pooling.** Per-position scores are aggregated with `1 − Π(1 − pᵢ)` rather than a
+   max. Worth **+8.0 points** on the n-gram baseline and **+3.2** on the model — a larger effect
+   than any architectural choice here.
 
-## 4. Things that did not work, reported because they were measured
+## 4. What did not work
 
 | Attempted | Result |
 |---|---|
@@ -57,10 +55,10 @@ Public solutions to this problem cluster at 42–68% and share three omissions:
 | Self-distillation as generation two | **−2.2 points** alone — but a **+0.63** ensemble member (paired McNemar, p = 0.004). |
 | NLL-fitted ensemble calibration | **−1.46 points** versus a plain average. Reliable for *rejecting* a member, unreliable for *weighting* one. |
 
-Two of those were my own methodological errors, and both are written up: choosing the
-self-distillation gate by **top-1 hit rate of the target** (hard labels have a perfect top-1 and
-are still worse to train on), and trusting **NLL-fitted calibration** without checking it tracks
-win rate. Same mistake twice — optimising a proxy without verifying it moves with the objective.
+Two of these share a cause: choosing the self-distillation gate by **top-1 hit rate of the
+target** (hard labels have a perfect top-1 and are still worse to train on), and trusting
+**NLL-fitted calibration** without checking it tracks win rate. In both cases a proxy metric did
+not move with the objective, so selection now happens on held-out win rate directly.
 
 ## 5. Where the model still fails
 
@@ -72,25 +70,7 @@ was the model's **2nd** choice 49.9% of the time and in its top 3 for 71.6%.
 problem, and the highest-value remaining work is sequence-level optimisation of the true
 objective (win rate) rather than the myopic per-turn hit rate that greedy argmax maximises.
 
-## 6. On the public leaderboard
-
-At submission the leaderboard showed **94.52**. We measured what produces a score of that shape
-rather than speculating:
-
-| Approach | Win rate |
-|---|---:|
-| Filter `test.txt` itself — the answer **is** in the candidate set | **94.26%** |
-| Same, with a survival tie-break | 94.42% |
-| **The identical solver on words not in its candidate set** | **2.73%** |
-
-A **91.5-point collapse**. The private re-run is exactly that second condition. For scale, a
-*perfect* Bayes posterior over `train.txt` scores 60.97% on unseen words — there is no route from
-there to 94.5 using training data alone, because the information is not present.
-
-Our 72.95% is the same number on both distributions. The measurement is reproducible via
-`tools/leak_ceiling.py`; neither it nor any diagnostic is imported by the submission path.
-
-## 7. Verification
+## 6. Verification
 
 * **27 unit tests**, including the batched game engine checked against a naive per-game scorer on
   2,000 random words (win flag, strike count, and exact guess string), and the matmul candidate
@@ -106,5 +86,5 @@ Our 72.95% is the same number on both distributions. The measurement is reproduc
 
 **Full detail:** `reports/MODEL_REPORT.md` (architecture, layer tables, every decision with its
 ablation number) · `reports/RESEARCH_REPORT.md` (literature and what was borrowed) ·
-`reports/COMPLIANCE.md` (rule-by-rule, with the greps that verify each claim) ·
+`reports/COMPLIANCE.md` (rules and data separation, with where to check each point) ·
 `reports/FINETUNING_REPORT.md` (the Qwen stage in full).

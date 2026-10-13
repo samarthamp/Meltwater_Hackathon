@@ -1,11 +1,8 @@
 # Compliance Notes
 
-**Meltwater Brand Buzzword Hackathon**
-
-The competition states that hardcoded solutions, lookup leaks and reverse-engineering result in
-disqualification, and that results must be reproducible by training on the provided train
-dataset. This document states, point by point, what this solution does and how each claim can be
-checked in the code.
+The competition requires results to be reproducible by training on the provided `train.txt`, and
+rules out hardcoded solutions. This document sets out, point by point, how the solution meets
+those requirements and where each point can be checked in the code.
 
 ---
 
@@ -22,10 +19,9 @@ dictionary, or a hyperparameter search.
   `scripts/09_make_submission.py` and the submission cell of the notebook.
 * `src/hangman/pipeline.py` — `build_teacher()` builds the n-gram tables and the candidate
   buckets from `dicts.fit`, which is derived from `train.txt` alone.
-* `grep -rn "load_test_words\|test_path" src/ scripts/` returns exactly four lines: the
-  declaration in `DataConfig`, the definition and body of `load_test_words` in `data.py`, and its
-  single call site in `scripts/09_make_submission.py`. There is no other reader of `test.txt` in
-  the codebase.
+* `grep -rn "load_test_words\|test_path" src/ scripts/` shows the only reader of `test.txt`:
+  `load_test_words` in `data.py` (configured by `DataConfig.test_path`), whose single call site is
+  `scripts/09_make_submission.py`.
 * `grep -c llm_teacher scripts/09_make_submission.py src/hangman/policy.py src/hangman/submit.py`
   returns `0` for all three: the inference path has no reference to the pretrained model.
 
@@ -42,8 +38,8 @@ guessed-letter sets and the remaining lives. It has no access to a word list at 
 
 One component *does* consult the training dictionary at inference: the optional exact
 information-set search (`ExactSearchPolicy` in `src/hangman/policy.py`), which enumerates
-**training-dictionary** words consistent with the board when that set is small. This is
-deliberate and it is not a leak:
+**training-dictionary** words consistent with the board when that set is small. It cannot act as
+an answer key:
 
 * The candidate set is built from `train.txt` only, which shares **zero** words with `test.txt`
   (verified in the notebook's EDA cell and in `artifacts/metrics/baselines.json`).
@@ -78,7 +74,7 @@ switches between full training and loading the checkpoints that training produce
 ## 4. The pretrained LLM: what it contributes, and the self-contained fallback
 
 A local **Qwen3-4B** checkpoint is used as a *teacher* in an optional stage. Three properties
-matter for the audit:
+matter:
 
 1. **It is never run at inference.** The submitted model is the compact character transformer
    ensemble. Qwen influences it only through training targets. `scripts/09_make_submission.py`
@@ -92,9 +88,6 @@ matter for the audit:
    checkpoints. Both appear in the ablation table in `reports/MODEL_REPORT.md`, so the
    contribution of external knowledge is quantified rather than hidden, and the submission can be
    switched to the fully self-contained model by pointing `--ckpts` at the `_final.pt` files.
-
-If the reviewing team prefers a solution with no external pretrained weights in its provenance,
-the `_final.pt` ensemble is that solution and its score is reported.
 
 ## 5. No external API calls
 
@@ -112,11 +105,9 @@ inference-path dependencies, all of which are preinstalled in the Kaggle image.
   including a repeat of an already-guessed letter;
 * the game terminates on the **sixth** wrong guess (five are survivable) or on completion.
 
-The problem statement's own example loop uses `while wrong_guesses <= 6`, which would permit a
-seventh guess. That contradicts its normative text ("the moment your `guessed_letters_string`
-triggers a 6th wrong guess"), so the strict rule is implemented. This is the conservative choice:
-a policy tuned for six survivable misses would lose games under a strict scorer, but never the
-reverse.
+The game ends "the moment your `guessed_letters_string` triggers a 6th wrong guess", and that
+strict reading is the one implemented. It is also the conservative choice: a policy tuned for six
+survivable misses would lose games under a strict scorer, but never the reverse.
 
 `tests/test_simulator.py` asserts each of these and additionally checks the batched engine against
 a naive single-game reference scorer on 2,000 random words, comparing win flag, strike count and
@@ -135,34 +126,7 @@ the naive reference scorer, checking:
 `scripts/09_make_submission.py` fails loudly if the generator's win rate and the validator's
 disagree by any amount, so the reported score cannot drift from what the file actually says.
 
-## 8. On the public leaderboard, and why we did not chase it
-
-At the time of writing the public leaderboard shows **94.52**. We investigated what produces a
-score of that shape rather than guessing, because the answer determines whether it is worth
-pursuing. `tools/leak_ceiling.py` measures it directly:
-
-| Approach | Win rate |
-|---|---:|
-| Filter `test.txt` itself, guess the most common letter (the answer **is** in the candidate set) | **94.26%** |
-| Same, with a survival tie-break | **94.42%** |
-| *Reported leaderboard* | *94.52* |
-| **The same solver on words not in its candidate set** | **2.73%** |
-
-A **91.5-point collapse**. Building the candidate set from the evaluation words is what the rules
-call a lookup leak, and the private re-run is precisely the condition that exposes it: the code
-still filters `test.txt`, which does not contain the private words.
-
-For scale, the legitimate ceiling: an exact Bayes posterior over `train.txt`, evaluated on words
-absent from it, scores **60.77%**. There is no path from 60.77 to 94.5 using the training data —
-reaching it would require roughly 90% on obscure six-letter words with six lives, and that
-information is not present in `train.txt`. Our model reaches 68.48% on held-out words and 72.10%
-on the public test set.
-
-The measurement is recorded in `artifacts/metrics/leak_investigation.json`. Nothing in
-`tools/leak_ceiling.py` or `tools/failure_analysis.py` is imported by the submission path; both
-carry a header saying so.
-
-## 9. Honest reporting
+## 8. Reporting conventions
 
 * The validation dictionary holds 22,530 words, so the standard error of a win rate near 60% is
   **±0.32 percentage points**. Differences smaller than roughly 0.7 points are not separable and

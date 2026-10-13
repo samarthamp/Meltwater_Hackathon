@@ -1,22 +1,10 @@
 """Game state -> model tensors.
 
-A hangman state is ``(board, present letters, absent letters, lives)``.  Two
-observations drive the encoding:
-
-1. **The absent set is evidence, not bookkeeping.**  Knowing that ``q``, ``x``
-   and ``z`` are *not* in the word sharply reshapes the posterior over what is.
-   Public hangman transformers encode only the board and at best suppress
-   already-guessed letters at the output; the surveyed reference implementation
-   states outright that it "doesn't account for letters guessed but absent".
-   We feed both guessed sets in as first-class inputs.
-
-2. **The guessed sets are sets.**  They carry no order, so they are encoded as
-   permutation-invariant indicator vectors rather than as a sequence
-   (Zaheer et al., 2017, *Deep Sets*).
-
-Everything the model needs is derivable from ``(word, guessed_letter_mask)``,
-which is what makes the training records in :mod:`hangman.collect` only eight
-bytes of state each.
+A state is ``(board, present letters, absent letters, lives)``.  Both guessed
+sets are model inputs, since absent letters are evidence too, and are encoded
+as order-free indicator vectors (cf. Zaheer et al., 2017, *Deep Sets*).  The
+whole state is derivable from ``(word, guessed_letter_mask)``, which keeps the
+training records in :mod:`hangman.collect` compact.
 """
 
 from __future__ import annotations
@@ -43,11 +31,9 @@ def encode_tokens(board: torch.Tensor, seq_len: int | None = None) -> tuple[torc
     Slot 0 is the ``[CLS]`` summary token; slots ``1..L`` hold the board, with
     ``TOK_MASK`` for hidden positions and ``TOK_PAD`` beyond the word.
 
-    ``seq_len`` defaults to whatever this batch actually needs rather than the
-    global maximum of 32.  Words average 9.4 characters, so padding every batch
-    to 32 would trip the model's cost - which on this hardware is dominated by
-    activation traffic, not arithmetic.  Combined with the length-bucketed
-    sampler in :mod:`hangman.dataset`, batches are typically 10-12 wide.
+    ``seq_len`` defaults to the width this batch needs (longest word + 1, capped
+    at ``SEQ_LEN``), which keeps batches from the length-bucketed sampler in
+    :mod:`hangman.dataset` narrow.
     """
     batch, lmax = board.shape
     device = board.device
@@ -84,7 +70,7 @@ def encode_globals(
         [52:58]  one-hot lives remaining, clamped to 0..5
         [58]     word length / MAX_WORD_LEN
         [59]     guesses made / 26
-        [60]     fraction of positions revealed
+        [60]     distinct present letters / word length
         [61]     distinct revealed letters / 26
     """
     device = present.device
@@ -100,9 +86,8 @@ def encode_globals(
     n_guesses = present_f.sum(dim=1) + wrong
     lengths_f = lengths.to(torch.float32)
 
-    # Fraction of *positions* revealed needs the per-letter multiplicity, which
-    # the caller does not have; the distinct-letter proxy below is equivalent
-    # information for the network and costs nothing to compute.
+    # The true revealed-position fraction needs letter multiplicities, which are
+    # not available here, so feature [60] uses distinct present letters instead.
     revealed_letters = present_f.sum(dim=1)
 
     extras = torch.stack(
@@ -141,8 +126,7 @@ def board_from_records(
     """Reconstruct ``(board, present, absent)`` from compact training records.
 
     Training records store only the word and a 26-bit guessed-letter mask; the
-    board, the present/absent split and the remaining lives all follow
-    deterministically, which keeps a 20M-state dataset near 1.3 GB.
+    board and the present/absent split follow deterministically.
 
     Parameters
     ----------
@@ -177,7 +161,7 @@ def pack_words(words: list[str], device: torch.device | str = "cpu") -> tuple[to
 
 
 def guessed_mask_to_bits(mask: torch.Tensor) -> torch.Tensor:
-    """``(B, 26)`` bool -> ``(B,)`` uint32 bitmask, for compact storage."""
+    """``(B, 26)`` bool -> ``(B,)`` int64 bitmask, for compact storage."""
     weights = (1 << torch.arange(26, device=mask.device, dtype=torch.long))
     return (mask.to(torch.long) * weights).sum(dim=1).to(torch.int64)
 

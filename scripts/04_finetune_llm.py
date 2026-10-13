@@ -1,17 +1,14 @@
 #!/usr/bin/env python
 """Stage 4: adapt Qwen3-4B into a hangman posterior teacher.
 
-Two phases, following the LLM2Vec recipe adapted to this task:
+Two phases, following the LLM2Vec recipe:
 
-1. **MNTP** - masked-character adaptation.  The backbone has only ever been run
-   causally; enabling bidirectional attention changes what every position sees,
-   so it needs a short adaptation phase before its representations mean
-   anything.  We train on the per-position head only, predicting the true letter
-   at hidden board positions.
+1. **MNTP** - masked-character prediction with the per-position head, adapting
+   the causally pretrained backbone to bidirectional attention.
 2. **SFT** - fit the presence head (and continue the per-position head) to the
-   Bayes teacher's soft posteriors on the collected states.
+   Bayes teacher's soft posteriors.
 
-Only LoRA adapters and the two heads are trained; the base weights stay frozen
+Only the LoRA adapters and the two heads are trained; base weights stay frozen
 in bf16.
 
     python scripts/04_finetune_llm.py --keep-layers 18 --mntp-steps 1500 --sft-steps 6000
@@ -183,11 +180,7 @@ def main() -> None:
 
 
 def board_from(batch: dict) -> torch.Tensor:
-    """Rebuild the board tensor from a record batch.
-
-    ``RecordDataset`` hands back the word and the present/absent split; the
-    board is one gather away and is what the LLM codec consumes.
-    """
+    """Rebuild the board tensor (the LLM codec's input) from a record batch."""
     words = batch["word"]
     real = words >= 0
     revealed = batch["present"].gather(1, words.clamp_min(0)) & real

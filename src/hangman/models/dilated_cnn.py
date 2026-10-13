@@ -1,13 +1,9 @@
 """Dilated convolutional ensemble member.
 
-A stack of dilated 1-D convolutions grows its receptive field exponentially
-with depth (van den Oord et al., 2016, *WaveNet*; Kalchbrenner et al., 2016,
-*Neural Machine Translation in Linear Time*).  On a 29-character board a depth
-of eight already sees the whole word, while the inductive bias stays local -
-which is exactly the bias that suits affixes and digraphs, and a genuinely
-different bias from both attention and recurrence.
-
-Conditioning, heads and output contract match the other two members.
+A gated residual stack of dilated 1-D convolutions (van den Oord et al., 2016,
+*WaveNet*) whose receptive field grows exponentially with depth, so a few
+layers cover the whole board while the inductive bias stays local.  Global features condition
+each block through FiLM; the output contract matches the other members.
 """
 
 from __future__ import annotations

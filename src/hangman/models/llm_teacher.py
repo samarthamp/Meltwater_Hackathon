@@ -1,50 +1,12 @@
 """Qwen3-4B adapted into a bidirectional hangman posterior teacher.
 
-Why bring in a pretrained LLM at all
-------------------------------------
-``train.txt`` holds 202,770 words after the validation split, and the test
-dictionary shares none of them.  A model fitted only on that list can learn
-English orthography only as far as those words expose it.  Qwen3-4B has read
-orders of magnitude more English, so it carries a prior over letter sequences
-that the training dictionary cannot supply.  The measurement that motivates
-this: **44% of the game states a real policy visits have no consistent word in
-the training dictionary at all**, and those are exactly the states where an
-outside prior can still say something useful.
-
-What is done to it
-------------------
-1. **Bidirectional attention.**  Reading ``_ o _ _ e r`` needs the suffix as
-   much as the prefix, and a causal decoder cannot see it.  We replace the
-   causal mask with a padding-only mask, which is step one of LLM2Vec
-   (BehnamGhader et al., 2024, *LLM2Vec: Large Language Models Are Secretly
-   Powerful Text Encoders*).  In transformers >= 4.5x this is done cleanly by
-   passing ``attention_mask`` as a ``{"full_attention": mask}`` dict, which the
-   model uses verbatim instead of building a causal one.
-2. **Exact character tokenisation.**  Board characters are mapped straight to
-   the tokenizer's single-character token ids rather than run through BPE, so
-   one board position is exactly one token and per-position supervision lines
-   up.  Character granularity is the right level for a spelling task - the
-   argument behind ByT5 (Xue et al., 2021) and CANINE (Clark et al., 2021).
-3. **Head surgery.**  ``lm_head`` is dropped; a presence head and a
-   per-position head are attached to the final hidden states.  One forward
-   pass, no generation, no sampling.
-4. **Layer truncation.**  Only the first ``keep_layers`` blocks are kept.
-   Orthographic and morphological structure is a lower-layer phenomenon, and
-   the teacher has to score millions of states, so depth is bought only where
-   it pays.  The trade-off is measured in reports/FINETUNING_REPORT.md.
-5. **LoRA.**  Low-rank adapters on attention and MLP projections
-   (Hu et al., 2021), heads trained in full, bf16 throughout.  QLoRA
-   (Dettmers et al., 2023) is available but off by default: ``bitsandbytes`` is
-   unreliable on aarch64 + sm_121 and 128 GB of unified memory makes it
-   unnecessary.
-
-Compliance note
----------------
-The submitted model never runs Qwen at inference.  Qwen only shapes the
-student's training targets, and it is only ever asked about boards derived from
-``train.txt`` words - it is never used to propose vocabulary, so it cannot
-import test-set words.  A ``--no-llm`` student is trained alongside and both
-scores are reported; see reports/COMPLIANCE.md.
+The pretrained LLM contributes an orthographic prior beyond the training
+dictionary.  The causal mask is replaced with a padding-only one (LLM2Vec
+step 1, BehnamGhader et al., 2024), each board character maps to exactly one
+token, ``lm_head`` is replaced by presence and per-position heads, the
+backbone is truncated to ``keep_layers`` blocks, and it is finetuned with LoRA
+(Hu et al., 2021).  The teacher only produces training targets and is not
+used at inference.
 """
 
 from __future__ import annotations
@@ -71,15 +33,10 @@ MASK_CHAR = "_"
 class PromptLayout:
     """Token offsets of each field for a given board width.
 
-    The layout is sized to the batch's actual word length rather than to the
-    global maximum.  That matters: attention and MLP cost are linear in
-    sequence length, and padding a 9-character board out to 29 characters plus
-    two 26-slot letter fields wastes roughly two thirds of every forward pass.
-
-    Two facts bound the letter fields exactly, so nothing is lost by shrinking
-    them:  a live game carries at most ``MAX_WRONG_GUESSES - 1`` absent letters
-    (the sixth ends it), and a word of length ``L`` has at most ``L`` distinct
-    letters.
+    Sized to the batch's longest word rather than the global maximum to keep
+    sequences short.  The letter fields are bounded exactly: a live game has at
+    most ``MAX_WRONG_GUESSES - 1`` absent letters, and a word of length ``L``
+    has at most ``L`` distinct letters.
     """
 
     board_width: int
@@ -231,7 +188,11 @@ class QwenHangmanTeacher(nn.Module):
     # -- bidirectionalisation -------------------------------------------------
 
     def _attention_mask(self, pad_mask: torch.Tensor) -> dict[str, torch.Tensor]:
-        """A padding-only mask, replacing the causal one (LLM2Vec step 1)."""
+        """A padding-only mask, replacing the causal one (LLM2Vec step 1).
+
+        Returned as a ``{"full_attention": mask}`` dict, which transformers
+        uses verbatim instead of building a causal mask.
+        """
         batch, seq = pad_mask.shape
         if self._mask_dtype is None:
             self._mask_dtype = self._probe_mask_dtype(pad_mask)
@@ -319,7 +280,7 @@ class QwenHangmanTeacher(nn.Module):
         return trainable, total
 
     def save_adapters(self, path: str | Path) -> Path:
-        """Persist only the adapters and heads - a few tens of MB, not 8 GB."""
+        """Save the heads, config and any LoRA adapters, not the base weights."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         state = {

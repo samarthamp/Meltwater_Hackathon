@@ -1,4 +1,4 @@
-# Conda environment for the Meltwater Hangman Hackathon.
+# Conda environment for the neural Hangman solver.
 #
 # NOTE ON TORCH: conda-forge does not publish a PyTorch build for the GB10's
 # `sm_121` compute capability on aarch64.  The environment is therefore

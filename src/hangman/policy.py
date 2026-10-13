@@ -1,24 +1,11 @@
 """Guess-selection policies.
 
-Taking ``argmax P(letter is in the word)`` is the obvious policy and it is not
-the optimal one.  The game does not reward hits, it rewards *finishing the word
-within six misses*, and those objectives come apart in two situations that this
-dataset makes common:
-
-* **Late in a game.**  The measured average is 4.0 wrong guesses out of six per
-  game, so most games end near the wall.  With one life left the right move is
-  whatever maximises the chance of surviving *and* finishing, which is not
-  always the single most likely letter - a slightly less likely letter that
-  reveals three positions can be worth more than a marginally likelier one that
-  reveals one.
-* **When the candidate set is small.**  Once the board pins the answer down to
-  a handful of dictionary words, marginal probabilities throw away the joint
-  structure.  Exact search over the information set is both cheap and better
-  (Meng & Lucas, 2024, *Deduction Game Framework and Information Set Entropy
-  Search*; Reams, 2009, *Playing Perfect Hangman*).
-
-Three policies are provided and ``AutoPolicy`` dispatches between them per
-state, which is the configuration selected on the validation dictionary.
+Greedy ``argmax P(letter is in the word)`` maximises the chance of a hit, not
+of finishing the word within six misses.  Two refinements target the gap:
+one-ply value lookahead in low-life states, and exact search over the
+dictionary-consistent candidate set once it is small (Reams, 2009; Meng &
+Lucas, 2024).  ``AutoPolicy`` and ``HybridEnsemblePolicy`` dispatch between
+them per state.
 """
 
 from __future__ import annotations
@@ -53,12 +40,8 @@ class ModelSource:
     """Wraps a trained network as a presence-probability source."""
 
     model: torch.nn.Module
-    #: Blend between the presence head and the noisy-OR pooling of the
-    #: per-position head.  Fitted per member by scripts/07_ensemble_eval.py;
-    #: 0.5 is the default because the measured optimum sits near 0.6 - the
-    #: per-position head, pooled correctly, turns out to be a *better* presence
-    #: estimator than the head trained directly for the job (0.0 -> 61.0%,
-    #: 0.6 -> 64.3% on 8,000 held-out words).
+    #: Blend weight between the presence head and the noisy-OR pooling of the
+    #: per-position head; fitted per member by ``scripts/08_ensemble_eval.py``.
     noisy_or_weight: float = 0.5
     amp_dtype: torch.dtype = torch.bfloat16
 
@@ -107,11 +90,9 @@ class ModelSource:
 class EnsembleSource:
     """Logit-space average of several sources, with per-source calibration.
 
-    Averaging in logit space (rather than probability space) is the standard
-    choice for a *decision* ensemble: it keeps confident-and-correct members
-    from being dragged toward the mean by an uncertain one.  Weights and
-    temperatures are fitted on the validation dictionary in
-    :mod:`hangman.calibrate`.
+    Averaging logits rather than probabilities keeps confident members from
+    being diluted by uncertain ones.  Weights and temperatures are fitted on
+    the validation dictionary in :mod:`hangman.calibrate`.
     """
 
     sources: list[ProbabilitySource]
@@ -157,31 +138,23 @@ class GreedyPolicy:
 class ValueGuidedPolicy:
     """One-ply expectimax over the top-k letters using the value head.
 
-    For each candidate letter ``l`` we evaluate
+    For each candidate letter ``l``:
 
         EV(l) = p_l * V(state after a hit) + (1 - p_l) * V(state after a miss)
 
-    where the hit successor is constructed by revealing every position whose
-    per-position distribution favours ``l``.  This costs ``2k`` extra forward
-    passes on the subset of states where it is enabled, which is why it is
-    restricted to low-life states - the ones where the decision is actually
-    tight.
+    The hit successor marks ``l`` as present without revealing positions.
+    Each call costs ``2k`` extra forward passes, so lookahead runs only on
+    states with at most ``max_lives`` lives left.
     """
 
     source: ModelSource
     topk: int = 5
     max_lives: int = 2
-    #: Optional separate source for the *letter probabilities*.  The value and
-    #: count heads belong to one model, but the choice of which letters to
-    #: evaluate is better made by the calibrated ensemble, so the two can be
-    #: split.  Defaults to using ``source`` for both.
+    #: Optional separate source for the letter probabilities (e.g. a calibrated
+    #: ensemble); the value head is always read from ``source``.
     prob_source: ProbabilitySource | None = None
-    #: The value head is only trained on states that carry a Monte-Carlo return,
-    #: which off-policy warm-start records do not.  Before any DAgger round it is
-    #: therefore constant (measured: mean 0.5155, std 0.0085) and one-ply
-    #: lookahead degenerates into picking at random among the top-k - which cost
-    #: 13.5 points of win rate before this guard existed.  If the head shows no
-    #: spread across the batch, fall back to greedy.
+    #: Fall back to greedy when the value head's std across the batch is below
+    #: this, as it is before any DAgger round supplies Monte-Carlo returns.
     min_value_spread: float = 0.02
 
     @torch.no_grad()
@@ -218,9 +191,8 @@ class ValueGuidedPolicy:
 
             hit_present = sub_present.clone()
             hit_present.scatter_(1, letter.unsqueeze(1), True)
-            # Optimistically reveal the positions the model believes hold the
-            # letter; the value head only needs the successor's shape, not its
-            # exact contents.
+            # Approximate the hit successor: the letter joins the present set,
+            # but the board is left unrevealed.
             hit_board = sub_board.clone()
             _, _, v_hit = self.source.full(hit_board, sub_len, hit_present, sub_absent)
 
@@ -242,38 +214,22 @@ class ValueGuidedPolicy:
 
 @dataclass
 class ExactSearchPolicy:
-    """Exact information-set refinement of the model's top-k candidates.
+    """Exact information-set re-ranking of the model's top-k candidates.
 
-    Once the board pins the answer down to a handful of dictionary-consistent
-    words, marginal probabilities throw away the joint structure: two letters
-    can be equally likely to appear yet differ sharply in how much they would
-    tell us.  This policy adds that missing term.
-
-    It is a *hybrid*, not a replacement.  The candidate set is built from the
-    training dictionary, which shares no words with the test set, so its
-    marginals are a prior and not an answer - and 45% of on-policy states have
-    no consistent word at all.  The model's probability therefore stays the
-    primary signal and exact search only re-ranks its top ``topk`` letters:
+    Applies where the dictionary-consistent candidate set ``C`` is non-empty
+    and at most ``max_candidates``; elsewhere the ``fallback`` policy decides.
+    The candidate dictionary does not contain the target words, so the model
+    probability stays the primary signal and only its top ``topk`` letters
+    are re-scored:
 
         score(l) = log p_model(l) - lambda * E[|C'| | guess l] / |C|
 
-    ``E[|C'|]`` is the expected size of the surviving candidate set, which is
-    the classic near-optimal Hangman criterion (Reams, 2009) and the entropy
-    term of information-set search (Meng & Lucas, 2024) in its second-moment
-    form.
-
-    Computing it without a per-state loop
-    -------------------------------------
-    Guessing ``l`` partitions the candidates by *reveal signature* - which
-    positions light up - and ``E[|C'|] = (sum_s n_s^2) / n``.  Two candidates
-    share a signature exactly when their occurrence indicator rows for ``l``
-    are identical, and two 0/1 rows are identical exactly when
-
-        rowsum(a) + rowsum(b) - 2 * <a, b> == 0
-
-    so the whole count is a batched matmul plus a comparison.  That turns what
-    would be a Python loop over states and letters into ``topk`` batched
-    operations - the difference between hours and seconds over the test set.
+    where ``E[|C'|]`` is the expected size of the surviving candidate set
+    (Reams, 2009; Meng & Lucas, 2024).  Guessing ``l`` partitions ``C`` by
+    reveal signature, so ``E[|C'|] = (sum_s n_s^2) / n``.  Two candidates share
+    a signature iff their 0/1 indicator rows ``a, b`` for ``l`` satisfy
+    ``rowsum(a) + rowsum(b) - 2 * <a, b> == 0``, which reduces the count to a
+    batched matmul.
     """
 
     teacher: BayesTeacher
@@ -283,10 +239,9 @@ class ExactSearchPolicy:
     topk: int = 5
     lambda_size: float = 0.35
     source: ProbabilitySource | None = None
-    #: Penalty applied to a letter that no consistent candidate contains.  The
-    #: candidate set comes from a dictionary that shares no words with the test
-    #: set, so "no candidate has this letter" is weak evidence at best; measured
-    #: on held-out words, a large penalty here *costs* win rate.  Default 0.
+    #: Penalty for a letter that no consistent candidate contains.  Off by
+    #: default: the candidate dictionary excludes the target words, so this is
+    #: weak evidence.
     miss_penalty: float = 0.0
 
     @torch.no_grad()
@@ -374,8 +329,8 @@ class ExactSearchPolicy:
 class AutoPolicy:
     """Dispatches greedy / value-guided / exact search per state.
 
-    The dispatch thresholds are chosen on the validation dictionary, never on
-    ``test.txt``.
+    In ``auto`` mode, exact search handles states with a small candidate set,
+    value lookahead handles low-life states, and the rest play greedily.
     """
 
     source: ModelSource
@@ -412,14 +367,11 @@ class AutoPolicy:
 
 @dataclass
 class HybridEnsemblePolicy:
-    """The shipped configuration: ensemble scores, primary-member lookahead.
+    """Ensemble presence scores with primary-member value lookahead.
 
-    Presence probabilities come from the calibrated ensemble, because that is
-    the best estimate available.  The auxiliary heads the lookahead consumes -
-    the value head and the count head - belong to individual models, so they are
-    read from the primary member.  Splitting the two is what lets the ensemble
-    drive the decision in the states where the search policies apply, instead of
-    being bypassed there.
+    Presence probabilities come from the calibrated ensemble; the value head
+    belongs to an individual model, so it is read from ``primary``.  This lets
+    the ensemble drive the search policies as well as greedy play.
     """
 
     ensemble: ProbabilitySource

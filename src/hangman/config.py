@@ -1,8 +1,7 @@
 """Configuration objects.
 
-Every tunable in the project lives here so that experiments are described by a
-single serialisable object rather than by scattered literals.  Configs are
-plain dataclasses (JSON-serialisable) and are written next to each checkpoint.
+Every tunable lives in a JSON-serialisable dataclass, so an experiment is
+described by a single object that is saved next to each checkpoint.
 """
 
 from __future__ import annotations
@@ -30,8 +29,8 @@ SAMPLE_SUBMISSION_CSV = DATA_DIR / "sample_submission.csv"
 #: Six wrong guesses is a loss; five is survivable (see simulator.py).
 MAX_WRONG_GUESSES = 6
 
-# Longest word in either provided file is 29 characters.  One extra slot is
-# reserved for the [CLS] token, and we round to 32 for tensor-core friendliness.
+# Longest word in the provided files is 29 characters; SEQ_LEN adds a [CLS]
+# slot and rounds up to 32.
 MAX_WORD_LEN = 29
 SEQ_LEN = 32
 
@@ -45,7 +44,7 @@ VOCAB_SIZE = 29
 #   [52:58]  one-hot lives remaining (0..5)
 #   [58]     word length / MAX_WORD_LEN
 #   [59]     number of guesses so far / 26
-#   [60]     fraction of positions revealed
+#   [60]     distinct present letters / word length (revealed-fraction proxy)
 #   [61]     number of distinct revealed letters / 26
 GLOBAL_FEATURE_DIM = 62
 
@@ -56,11 +55,11 @@ class DataConfig:
 
     train_path: Path = TRAIN_TXT
     test_path: Path = TEST_TXT
-    #: Fraction of train.txt held out as a *disjoint validation dictionary*.
-    #: This mirrors the real condition: train and test share zero words.
+    #: Fraction of train.txt held out as a disjoint validation dictionary,
+    #: mirroring the zero word overlap between train and test.
     val_fraction: float = 0.10
     split_seed: int = 20260903
-    #: When True the teacher's candidate dictionary is the full train.txt.
+    #: When True the fit dictionary is all of train.txt (no validation split).
     #: Used only for the final submission model, never during model selection.
     use_full_dictionary: bool = False
 
@@ -140,9 +139,8 @@ class OptimConfig:
     #: Exponential moving average of weights; 0 disables.
     ema_decay: float = 0.999
     amp_dtype: str = "bfloat16"
-    #: torch.compile fuses the elementwise work (RMSNorm scaling, FiLM
-    #: modulation, SwiGLU gating, residuals) that profiling showed to be 30% of
-    #: step time on this machine.  Measured 2.3x faster and 37% less memory.
+    #: torch.compile fuses the elementwise work (RMSNorm, FiLM, SwiGLU gating,
+    #: residuals) that otherwise dominates step time.
     compile: bool = True
 
 
@@ -157,8 +155,8 @@ class CollectConfig:
     dagger_rounds: int = 4
     #: Fraction of each training batch drawn from the off-policy pool.
     offpolicy_mix: float = 0.30
-    #: Oversampling weight applied to words of length 4..9, where the measured
-    #: baseline loses most games.
+    #: Oversampling weight for words in ``short_word_range``, where most games
+    #: are lost.
     short_word_boost: float = 1.6
     short_word_range: tuple[int, int] = (4, 9)
     n_workers: int = 18
@@ -169,20 +167,17 @@ class CollectConfig:
 class SelfDistillConfig:
     """Using a trained model as the teacher for the next generation.
 
-    The Bayes oracle that labelled generation one scores 0.656 top-1 on the
-    states that matter; the model it trained scores 0.744.  Once that is true
-    the oracle is no longer the best target available - see
-    :mod:`hangman.selfdistill`.
+    See :mod:`hangman.selfdistill`.
     """
 
     enabled: bool = False
-    #: Gate on candidate count: ``lambda = n / (n + kappa)`` weight on the Bayes
-    #: posterior.  0 = pure student, large = pure Bayes.  Chosen by measurement
-    #: in ``tools/blend_sweep.py``, recorded in artifacts/metrics/blend_sweep.json.
+    #: Gate on candidate count: ``lambda = n / (n + kappa)`` is the weight on the
+    #: Bayes posterior.  0 = pure Bayes, inf = pure student.  Tuned with
+    #: ``tools/blend_sweep.py``.
     kappa_sd: float = 50.0
     #: Checkpoint of the previous generation, used as the teacher.
     teacher_ckpt: str = ""
-    #: Noisy-OR blend for the teacher's own inference; the value fitted for it.
+    #: Weight of the noisy-OR pooled positional head in the teacher's inference.
     teacher_noisy_or_weight: float = 0.4
 
 
@@ -206,7 +201,7 @@ class LLMConfig:
     """Qwen3-4B teacher."""
 
     model_path: str = "/home/samarthamp/ai-models/qwen3-4b"
-    #: Keep only the first N transformer layers (0 = keep all).  Chosen by the
+    #: Keep only the first N transformer layers (0 = keep all); see the
     #: layer-truncation study in reports/FINETUNING_REPORT.md.
     keep_layers: int = 18
     bidirectional: bool = True         # LLM2Vec-style causal-mask removal
@@ -217,7 +212,7 @@ class LLMConfig:
         "q_proj", "k_proj", "v_proj", "o_proj",
         "gate_proj", "up_proj", "down_proj",
     )
-    load_in_4bit: bool = False         # QLoRA; bitsandbytes is unreliable here
+    load_in_4bit: bool = False         # QLoRA via bitsandbytes
     mntp_steps: int = 4000             # masked-character adaptation
     sft_steps: int = 12000             # fit to Bayes posteriors
     batch_size: int = 64
@@ -242,7 +237,7 @@ class RLConfig:
     #: KL trust region back to the supervised policy, preventing collapse.
     kl_coef: float = 0.05
     #: Reward = win - efficiency_penalty * wrong_guesses, matching the
-    #: leaderboard tiebreak (Score - E / 1e8).
+    #: scoring tiebreak (Score - E / 1e8).
     efficiency_penalty: float = 0.001
 
 
@@ -284,10 +279,8 @@ class ExperimentConfig:
 def _from_dict(cls: type, raw: dict[str, Any]) -> Any:
     """Rebuild a nested dataclass from a plain dict.
 
-    ``from __future__ import annotations`` turns every field annotation into a
-    string, so ``field.type`` cannot be tested with ``is_dataclass``.  The
-    nested config types are all supplied through ``default_factory``, so we
-    recover the real class by calling it.
+    Field annotations are strings under ``from __future__ import annotations``,
+    so nested config classes are recovered by calling each ``default_factory``.
     """
     kwargs: dict[str, Any] = {}
     for f in dataclasses.fields(cls):

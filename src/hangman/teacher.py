@@ -1,47 +1,18 @@
 """Three-tier Bayes posterior oracle - the label generator for every model.
 
-Why a teacher at all
---------------------
-Training a hangman net on hard 0/1 "is this letter in the word" labels throws
-away almost all of the available information.  Given a board, the *exact*
-posterior probability that each letter occurs can be computed by enumerating
-the dictionary words consistent with the board, and that posterior is a far
-richer target: it carries the inter-letter structure that hard labels destroy
-(Hinton, Vinyals & Dean, 2015, *Distilling the Knowledge in a Neural Network*).
-We use it as a soft target, i.e. we distil an exact solver into a network.
-
-Leave-one-out
--------------
-The played word is removed from its own candidate set.  Without this the
-teacher can identify the answer outright and would teach the student to expect
-information it will never have at test time - train and test dictionaries are
-disjoint.  Leave-one-out makes the teacher face exactly the test condition.
-
-The relaxation ladder
----------------------
-Measured on this data, **44.4% of on-policy states have no consistent
-dictionary word at all**.  A single exact posterior is therefore silent on
-nearly half of the states a real game visits.  We recover signal with a ladder
-of progressively weaker constraint sets, stopping at the first that yields
-candidates:
+Soft targets are the posterior probability that each letter occurs, computed
+over the dictionary words consistent with the board (distillation as in Hinton,
+Vinyals & Dean, 2015).  The played word is excluded leave-one-out, matching the
+disjoint train/test dictionaries.  Constraints are relaxed in a ladder:
 
   Tier 1  positional match  AND  no present letter hidden  AND  no absent letter
-  Tier 2  positional match  AND  no absent letter                (drop present)
-  Tier 3  positional match                                        (drop both)
-  Tier 4  interpolated character n-gram backoff (see ngram.py)
+  Tier 2  positional match  AND  no absent letter
+  Tier 3  positional match
+  Tier 4  interpolated character n-gram backoff (:mod:`hangman.ngram`)
 
-Tiers 1-3 are exact posteriors over successively coarser candidate sets; Tier 4
-is a smoothed generative model that is defined everywhere.  Their outputs are
-blended by candidate count with a Jelinek-Mercer style weight
-``lambda = n / (n + kappa)``, so the exact posterior dominates when it is well
-supported and decays smoothly into the backoff when it is not.
-
-Implementation
---------------
-Everything is batched on the GPU.  The candidate filter for a batch of ``S``
-states against a length bucket of ``N`` words is ``L`` elementwise passes over
-an ``(S, N)`` boolean, and the posterior itself is a single ``(S, N) @ (N, 26)``
-matmul.  This labels millions of states per minute.
+Each exact tier takes a Jelinek-Mercer share ``lambda = n / (n + kappa)`` of
+the remaining weight, where ``n`` is its candidate count; the n-gram backoff
+receives the rest.  Filtering and posteriors are batched GPU matrix products.
 """
 
 from __future__ import annotations
@@ -55,10 +26,8 @@ from .config import TeacherConfig
 from .data import LengthBuckets
 from .ngram import HOLE, NgramModel
 
-#: Candidate filtering runs through matrix products.  Values are small integers
-#: (position matches and letter counts, both <= 29), which fp16 represents
-#: exactly, and torch accumulates fp16 matmuls in fp32 - so the "arithmetic"
-#: filter is bit-exact with the elementwise one, just far faster.
+#: dtype of the candidate-filtering matmuls.  Operands and results are small
+#: integers, which fp16 represents exactly, so filtering stays exact.
 MATMUL_DTYPE = torch.float16
 
 #: Number of exact tiers in the relaxation ladder (n-gram backoff is separate).
@@ -77,7 +46,7 @@ class TeacherOutput:
     n_candidates : (B,) int64
         Size of the Tier-1 consistent candidate set (0 when it is empty).
     tier : (B,) int8
-        Which tier supplied the dominant exact posterior; ``N_EXACT_TIERS``
+        First exact tier (0-based) that received weight; ``N_EXACT_TIERS``
         means the n-gram backoff carried the state alone.
     """
 
@@ -101,11 +70,9 @@ class BayesTeacher:
         self.device = torch.device(device)
         self.buckets = buckets
 
-        # Dictionary resident on the accelerator, one entry per word length.
-        # ``_onehot[L]`` is (N, L*26): word n has a 1 at ``i * 26 + c`` when its
-        # i-th character is ``c``.  ``_counts[L]`` is (N, 26) occurrence counts.
-        # Both exist so that candidate filtering is matrix multiplication rather
-        # than a loop of elementwise comparisons - see ``_consistency``.
+        # Per-length dictionary tensors on the device.  ``_onehot[L]`` is
+        # (N, L*26) with a 1 at ``i * 26 + c`` when character ``i`` is ``c``;
+        # ``_counts[L]`` is (N, 26) letter counts.  Used by ``_consistency``.
         self._chars: dict[int, torch.Tensor] = {}
         self._presence: dict[int, torch.Tensor] = {}
         self._onehot: dict[int, torch.Tensor] = {}
@@ -143,23 +110,15 @@ class BayesTeacher:
     ) -> torch.Tensor:
         """``(S, N)`` bool mask of dictionary words consistent with each board.
 
-        The three constraints are expressed as matrix products rather than as a
-        loop over positions, which is what makes labelling millions of states
-        practical (measured: ~50x faster than the elementwise formulation).
+        Each constraint is a matrix product:
 
-        1. *Positional match.*  With ``Q[s, i*26+c] = 1`` when position ``i`` is
-           revealed showing letter ``c``, the product ``onehot @ Q.T`` counts how
-           many revealed positions a word matches; a word is positionally
-           consistent exactly when that count equals the number of revealed
-           positions.
-        2. *No surplus guessed letters.*  Positional match already forces a word
-           to carry every revealed letter at its revealed positions, so the only
-           remaining requirement is that it carries no **extra** occurrence of
-           any guessed letter: ``counts @ guessed <= n_revealed``.  A guessed
-           letter that is absent from the word has target count zero, so this
-           single inequality covers both the present and the absent rule.
-        3. *No absent letter at all*, ``counts @ absent == 0``, which is the
-           relaxed rung used when the strict set empties.
+        1. *Positional match.*  With ``Q[s, i*26+c] = 1`` when position ``i``
+           shows ``c``, ``Q @ onehot.T`` counts matched revealed positions,
+           which must equal the number revealed.
+        2. *No surplus guessed letters*, ``guessed @ counts.T <= n_revealed``.
+           Given (1), this rules out both extra occurrences of present letters
+           and any absent letter.
+        3. *No absent letter*, ``absent @ counts.T == 0``.
 
         ``tier`` selects the rung: 0 applies 1+2, 1 applies 1+3, 2 applies 1.
         """
@@ -253,8 +212,8 @@ class BayesTeacher:
 
         if ngram_scores is None:
             ngram_scores = self._ngram_batch(length, boards, present, absent)
-        # ``ngram_scores`` are presence marginals (noisy-OR pooled), i.e. on the
-        # same scale as the exact posterior, so they mix without renormalising.
+        # Noisy-OR presence marginals share the exact posterior's scale, so they
+        # mix without renormalising.
         blended += weight_left.unsqueeze(1) * ngram_scores
 
         guessed = present | absent

@@ -1,14 +1,8 @@
 """Evaluation: win rate, efficiency, and per-length breakdowns.
 
-The only number that matters is the fraction of words solved within six wrong
-guesses, measured on a dictionary the model has never seen.  Everything here
-plays real games under the strict competition rules rather than scoring
-next-letter accuracy, because those two disagree: a model can win the
-next-letter contest and still lose games by spending its lives in the wrong
-order.
-
-Games are grouped by word length so the exact-search policy and the teacher can
-work on same-length batches; the grouping has no effect on the result.
+Plays complete games under the competition rules rather than scoring
+next-letter accuracy.  Words are grouped by length so policies receive
+same-length batches; the grouping does not affect the result.
 """
 
 from __future__ import annotations
@@ -133,7 +127,7 @@ def save_report(report: EvalReport, path: str | Path) -> Path:
 
 
 class AblationTable:
-    """Accumulates one row per configuration for reports/MODEL_REPORT.md."""
+    """Accumulates one evaluation row per configuration for an ablation table."""
 
     def __init__(self) -> None:
         self.rows: list[EvalReport] = []

@@ -1,9 +1,4 @@
-"""Correctness tests for the batched engine and the state encoding.
-
-The batched engine is the thing that decides what our submission string says,
-so it is validated against a naive single-game reference implementation of the
-published rules, including the edge cases the rules call out explicitly.
-"""
+"""Tests for the batched game engine (against a reference scorer) and state encoding."""
 
 from __future__ import annotations
 
@@ -133,9 +128,8 @@ def test_state_encoding_shapes_and_lives():
     game.apply(torch.tensor([16, 16], device=DEVICE))      # 'q', a miss for both
     tokens, attn = encode_tokens(game.board())
     globals_vec = encode_globals(game.lengths, game.present, game.absent)
-    # Width is sized to the batch (CLS + longest word), not to the global
-    # maximum of 32 - padding every batch to 32 would triple the model's cost
-    # on this bandwidth-bound hardware.
+    # Width is sized to the batch (CLS + longest word), not padded to the
+    # global maximum of 32.
     assert tokens.shape == (2, 1 + len("hangman"))
     assert encode_tokens(game.board(), seq_len=32)[0].shape == (2, 32)
     assert attn[:, 0].all()

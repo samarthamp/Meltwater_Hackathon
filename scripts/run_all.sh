@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# The whole pipeline, in order, from a clean checkout.
+# Run the full pipeline, in order, from a clean checkout.
 #
 #   bash scripts/run_all.sh              # everything, including the LLM stage
 #   SKIP_LLM=1 bash scripts/run_all.sh   # train.txt only, no pretrained weights
 #
-# Every stage is resumable: re-running skips work whose artifacts already
-# exist, so an interrupted run can be restarted with the same command.
-#
-# Wall clock on a DGX Spark (GB10): roughly 8 hours end to end, of which the
-# three ensemble members are ~4 h and the Qwen3-4B stage ~2 h.  Stages run
-# sequentially by design - see reports/MODEL_REPORT.md section 8 for the
-# measurements showing that sharing this GPU between jobs is slower, not faster.
+# Re-runs reuse cached n-gram tables and record shards; models are retrained.
+# PY overrides the Python interpreter (default: the `hangman` conda env).
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
